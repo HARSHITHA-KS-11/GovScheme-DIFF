@@ -198,37 +198,24 @@ export const RoboAiAssistant: React.FC<RoboAiAssistantProps> = ({
     }
   }, [messages, currentSessionId]);
 
-  // Initial welcome message and dynamic update when language changes
+  // Initial welcome message in English only
   useEffect(() => {
-    const isHi = language === 'hi';
     setMessages((prev) => {
       const hasUserMessages = prev.some((m) => m.sender === 'user');
       if (!hasUserMessages) {
-        let welcomeText = isHi
-          ? `नमस्ते! मैं आपका कानूनी AI सहायक हूँ। कोई भी कानूनी प्रश्न पूछें, या विश्लेषण करने के लिए अनुबंध अपलोड करें!`
-          : `Hi! I can help explain government scheme circulars. Ask about eligibility, benefits, or deadlines, or upload a circular to get started.`;
+        let welcomeText = `1. Hi! I am GovScheme Diff AI, your plain-English guide for government scheme circulars.\n2. Upload or paste any circular to check eligibility, benefits, required documents, and deadlines.\n3. Every answer is grounded strictly in the circular text you provide.`;
         if (inputContext?.isComparisonMode) {
           if (!inputContext.hasInput && !inputContext.docAText && !inputContext.docBText) {
-            welcomeText = isHi
-              ? `नमस्ते! मैं आपका लीगललेंस AI सहायक हूँ। तुलना के लिए कृपया ऊपर **Document A** या **Document B** का पाठ दर्ज करें, फिर मुझसे अपने अनुबंधों के बारे में कोई भी प्रश्न पूछें!`
-              : `Hello! I am your GovScheme Diff Assistant. Please paste or upload text for **Circular A** or **Circular B** above, then ask me about the scheme details or changes!`;
+            welcomeText = `1. Welcome to Compare Circulars mode.\n2. Paste or upload text for Circular A and Circular B above.\n3. Ask me what changed in eligibility, limits, benefits, documents, or deadlines.`;
           } else {
-            welcomeText = isHi
-              ? `नमस्ते! मैं आपका लीगललेंस AI सहायक हूँ। मुझसे **Document A**, **Document B**, या दोनों अनुबंधों की तुलना के बारे में कोई भी प्रश्न पूछें!`
-              : `Hello! I am your GovScheme Diff Assistant. Ask me about **Circular A**, **Circular B**, or the changes between them!`;
+            welcomeText = `1. Ready to answer questions about Circular A and Circular B.\n2. Ask what was added, changed, or removed between the two circulars.\n3. Every answer cites circular sections and stays strictly grounded.`;
           }
         } else if (document) {
-          welcomeText = isHi
-            ? `नमस्ते! मैं आपका लीगललेंस AI सहायक हूँ। अपने अनुबंध (${document.document_title}) के बारे में कुछ भी पूछें। मैं खंड, जमा वापसी या नोटिस अवधि समझा सकता हूँ!`
-            : `Hello! I am your GovScheme Diff Assistant. Ask me about this circular (${document.document_title}), including its eligibility, benefits, or deadlines.`;
+          welcomeText = `1. Ready to answer questions about "${document.document_title}".\n2. Ask about eligibility rules, income or age limits, benefits, documents, or deadlines.\n3. Answers include page numbers and section references whenever available.`;
         } else if (inputContext?.uploadedFileName) {
-          welcomeText = isHi
-            ? `नमस्ते! मुझे दिखता है कि आपने **${inputContext.uploadedFileName}** अपलोड किया है! इसके बारे में कुछ भी पूछें या खंड देखने के लिए "Analyze Document" पर क्लिक करें!`
-            : `Hi! I see you uploaded **${inputContext.uploadedFileName}** (${inputContext.uploadedFileSize || 'File'}) in Circular Upload! Ask me about it or choose "Circular Analysis" to see a plain-language explanation.`;
+          welcomeText = `1. File "${inputContext.uploadedFileName}" is selected for checking.\n2. Ask a quick question here or click Analyze Circular to inspect every section.\n3. Answers are based strictly on the uploaded circular text.`;
         } else if (inputContext?.pastedText) {
-          welcomeText = isHi
-            ? `नमस्ते! मुझे दिखता है कि आपने पाठ पेस्ट किया है! इसके बारे में कुछ भी पूछें या विश्लेषण के लिए "Analyze Document" पर क्लिक करें!`
-            : `Hi! I see you pasted circular text. Ask me about it or choose "Circular Analysis" to see a plain-language explanation.`;
+          welcomeText = `1. Circular text is ready for checking.\n2. Ask a question about it or click Analyze Circular to review every section.\n3. Answers are written in 3 short points using everyday English.`;
         }
 
         return [
@@ -239,18 +226,8 @@ export const RoboAiAssistant: React.FC<RoboAiAssistantProps> = ({
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ];
-      } else {
-        // If thread has user messages, convert all assistant messages to target language
-        return prev.map((msg) => {
-          if (msg.sender === 'assistant') {
-            return {
-              ...msg,
-              text: localizeChatMessageText(msg.text, language),
-            };
-          }
-          return msg;
-        });
       }
+      return prev;
     });
   }, [language, document?.document_title, inputContext?.uploadedFileName, inputContext?.pastedText]);
 
@@ -291,17 +268,12 @@ export const RoboAiAssistant: React.FC<RoboAiAssistantProps> = ({
   const handleStartNewChat = () => {
     const newId = `chat_${Date.now()}`;
     setCurrentSessionId(newId);
-    const isHi = language === 'hi';
     const welcomeMsg: ChatMessage = {
       id: `welcome_${Date.now()}`,
       sender: 'assistant',
       text: document
-        ? (isHi
-            ? `नमस्ते! मैं आपका लीगललेंस AI सहायक हूँ। अपने अनुबंध (${document.document_title}) के बारे में कुछ भी पूछें।`
-            : `Hello! I am your GovScheme Diff Assistant. Ask me about this circular (${document.document_title}).`)
-        : (isHi
-            ? `नमस्ते! मैं आपका कानूनी सहायक हूँ। कोई भी प्रश्न पूछें या विश्लेषण के लिए अनुबंध अपलोड करें!`
-            : `Hi! I can help explain government scheme circulars. Ask about eligibility, benefits, or deadlines, or upload a circular to get started.`),
+        ? `1. Ready to answer questions about "${document.document_title}".\n2. Ask about eligibility, income or age limits, benefits, documents, or deadlines.\n3. Answers include page numbers and section references whenever available.`
+        : `1. Hi! I explain government scheme circulars in simple everyday English.\n2. Upload or paste a circular to check eligibility, benefits, required documents, and deadlines.\n3. Every answer is grounded strictly in the circular text you provide.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
     setMessages([welcomeMsg]);
@@ -370,15 +342,12 @@ export const RoboAiAssistant: React.FC<RoboAiAssistantProps> = ({
       }
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err: any) {
-      const isHi = language === 'hi';
       setMessages((prev) => [
         ...prev,
         {
           id: `err_${Date.now()}`,
           sender: 'assistant',
-          text: isHi
-            ? 'क्षमा करें, आपके प्रश्न को संसाधित करने में त्रुटि हुई। कृपया पुनः प्रयास करें।'
-            : 'Sorry, I encountered an error processing your query. Please try again.',
+          text: 'Sorry, I encountered an error processing your query. Please try again.',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
@@ -667,7 +636,7 @@ export const RoboAiAssistant: React.FC<RoboAiAssistantProps> = ({
                         className="text-[10px] bg-[#FBF8F1] hover:bg-[#E7E1D3]/60 text-[#B85C38] px-2 py-0.5 rounded border border-[#E7E1D3] font-semibold flex items-center space-x-1"
                       >
                         <Search className="w-2.5 h-2.5 text-[#065F46]" />
-                        <span>Clause {cid.replace(/[^\d]/g, '') || cid}</span>
+                        <span>Section {cid.replace(/[^\d]/g, '') || cid}</span>
                       </button>
                     ))}
                   </div>
@@ -734,10 +703,10 @@ export const RoboAiAssistant: React.FC<RoboAiAssistantProps> = ({
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend()}
           placeholder={
-            isListening ? (language === 'hi' ? 'आवाज़ सुन रहे हैं...' : 'Listening to voice...') : t('robo.inputPlaceholder')
+            isListening ? 'Listening to voice...' : t('robo.inputPlaceholder')
           }
           aria-label={
-            isListening ? (language === 'hi' ? 'आवाज़ सुन रहे हैं' : 'Listening to voice') : t('robo.inputPlaceholder')
+            isListening ? 'Listening to voice' : t('robo.inputPlaceholder')
           }
           className="flex-1 bg-[#FBF8F1] border border-[#E7E1D3] rounded-lg px-3 py-2 text-xs text-[#1E1B17] focus:outline-none focus:border-[#B85C38]"
         />

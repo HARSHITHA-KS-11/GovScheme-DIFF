@@ -92,7 +92,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                         : 'bg-[#E7E1D3] text-[#1E1B17]'
                       }`}
                   >
-                    #{idx + 1}
+                    #{idx + 1}{c.page_number ? ` • P${c.page_number}` : ''}
                   </span>
                   <span className="truncate text-[#1E1B17] font-bold">
                     {c.title}

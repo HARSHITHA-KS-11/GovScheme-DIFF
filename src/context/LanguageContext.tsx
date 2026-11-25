@@ -1,6 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode } from 'react';
 import enTranslations from '../locales/en.json';
-import knTranslations from '../locales/kn.json';
 import type { SupportedLanguage } from '../types/language';
 
 export type { SupportedLanguage } from '../types/language';
@@ -11,12 +10,10 @@ interface LanguageContextType {
   t: (key: string, params?: Record<string, string | number>) => string;
 }
 
-const STORAGE_LANG_KEY = 'legallens_language';
+const STORAGE_LANG_KEY = 'govscheme_language';
 
 const translations: Record<SupportedLanguage, any> = {
   en: enTranslations,
-  hi: enTranslations,
-  kn: knTranslations,
 };
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
@@ -24,10 +21,7 @@ const LanguageContext = createContext<LanguageContextType | undefined>(undefined
 export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [language, setLanguageState] = useState<SupportedLanguage>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_LANG_KEY);
-      if (saved !== 'en') {
-        localStorage.setItem(STORAGE_LANG_KEY, 'en');
-      }
+      localStorage.setItem(STORAGE_LANG_KEY, 'en');
     } catch {}
     return 'en';
   });
@@ -45,20 +39,11 @@ export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }
     let fallback: any = translations['en'];
 
     for (const key of keys) {
-      if (current && typeof current === 'object' && key in current) {
-        current = current[key];
-      } else {
-        current = undefined;
-      }
-
-      if (fallback && typeof fallback === 'object' && key in fallback) {
-        fallback = fallback[key];
-      } else {
-        fallback = undefined;
-      }
+      current = current && typeof current === 'object' && key in current ? current[key] : undefined;
+      fallback = fallback && typeof fallback === 'object' && key in fallback ? fallback[key] : undefined;
     }
 
-    let result = (typeof current === 'string' ? current : typeof fallback === 'string' ? fallback : keyPath);
+    let result = typeof current === 'string' ? current : typeof fallback === 'string' ? fallback : keyPath;
 
     if (params) {
       Object.entries(params).forEach(([pKey, pVal]) => {

@@ -1,115 +1,118 @@
-import fs from 'fs';
-import path from 'path';
 import { chunkDocumentTextIntoClauses } from '../services/astraBackend.js';
 
-function buildSynthetic30PageContractText(): string {
-  let pages: string[] = [];
+function buildMultiPageGovernmentCircularText(): string {
+  const pages: string[] = [];
 
-  pages.push(`CONFIDENTIAL & PRIVILEGED — COMPREHENSIVE MASTER SERVICE & OPERATING AGREEMENT
+  pages.push(`--- Page 1 ---
+GOVERNMENT OF KARNATAKA
+DEPARTMENT OF AGRICULTURE
+Circular No. AGRI/2026/101, Dated: 01 April 2026
 
-MASTER ENTERPRISE SERVICES AGREEMENT
-Formal Commercial Engagement & Comprehensive Governance Covenant
+Subject: Crop Input Subsidy Scheme Guidelines 2026-27
 
-This Comprehensive Master Enterprise Services Agreement (“Agreement”) is entered into effective as of September 16, 2026 (“Effective Date”), by and between Apex Global Cloud Infrastructure LLC (“Provider”), and Horizon Logistics International Corp. (“Client”).
+1. SCHEME OVERVIEW AND OBJECTIVE
+1.1 The State Government launches the Crop Input Subsidy Scheme to support small and marginal farmers.
+1.2 Financial assistance is credited directly to Aadhaar-linked bank accounts via DBT.
 
-1. DEFINITIONS AND INTERPRETATION
-1.1 Applicable Law: All federal, state, local, and municipal statutes, ordinances, and regulatory guidelines applicable to the delivery of cloud services.
-1.2 Confidential Information: Any non-public proprietary materials, algorithms, business strategies, technical designs, trade secrets, and source code.
-1.3 Deliverables: All software configurations, architecture documentation, automation scripts, and diagnostic modules produced under a valid Statement of Work (“SOW”).
-1.4 Force Majeure Event: Acts of God, government embargoes, grid-scale power outages, cyber warfare, or catastrophic supplier failures beyond reasonable operational control.
+2. ELIGIBILITY CRITERIA
+2.1 Applicants must own or cultivate up to 2 hectares of agricultural land.
+(a) Must hold valid land passbook or tenancy record.
+(b) Must be a permanent resident of Karnataka.`);
 
-CONTRACT REF: GBL-AGR-2026-X990 Page 1 of 30`);
-
-  for (let i = 2; i <= 29; i++) {
-    pages.push(`CONFIDENTIAL & PRIVILEGED — COMPREHENSIVE MASTER SERVICE & OPERATING AGREEMENT
-
-ARTICLE ${i}: ${i}. ARTICLE ${i} PROVISION
-${i}.1 Operational Covenants and Compliance: The Parties agree that all operations governed under this Article ${i} shall comply strictly with enterprise cloud architecture standards.
-${i}.2 Statutory and Contractual Enforcement: In the event of any material ambiguity or discrepancy, the terms established herein shall supersede and control.
-${i}.3 Auditability and Record Retention: Provider warrants that complete ledger entries documenting all access vectors shall be maintained.
-${i}.4 Risk Allocation and Mutual Indemnification: Each Party covenants to indemnify, defend, and hold harmless the other Party against third-party claims.
-
-Parameter Metric Specification Standard Validation Threshold Remediation Time
-Uptime Guarantee-${i} High Availability Cluster 99.995% Availability < 15 Minutes
-
-CONTRACT REF: GBL-AGR-2026-X990 Page ${i} of 30`);
+  for (let i = 3; i <= 10; i++) {
+    pages.push(`--- Page ${i - 1} ---
+Section ${i}: Implementation Provision ${i}
+${i}.1 District Verification: Tehsildar and Agriculture Officer shall verify applicant records for phase ${i}.
+${i}.2 Disbursement Schedule: Subsidy amount of Rs. 6,000 per hectare shall be released within 30 days.`);
   }
 
-  pages.push(`CONFIDENTIAL & PRIVILEGED — COMPREHENSIVE MASTER SERVICE & OPERATING AGREEMENT
-
-EXECUTION, COUNTERPARTS & FORMAL ATTESTATION
-IN WITNESS WHEREOF, the Parties hereto have caused this Comprehensive Master Services Agreement to be duly executed and delivered as of the Effective Date.
-
-FOR PROVIDER: APEX GLOBAL CLOUD INFRASTRUCTURE LLC
-Authorized Signature: Marcus Vance (VP of Infrastructure & Enterprise Systems)
-
-FOR CLIENT: HORIZON LOGISTICS INTERNATIONAL CORP.
-Authorized Signature: Elena Rostova (Chief Technology Officer)
-
-CONTRACT REF: GBL-AGR-2026-X990 Page 30 of 30`);
+  pages.push(`--- Page 10 ---
+ANNEXURE I: REQUIRED DOCUMENTS AND DEADLINE
+(a) Aadhaar Card and Bank Passbook Copy
+(b) Latest Land Record Extract (RTC)
+Last date to submit online application: 30th November 2026.`);
 
   return pages.join('\n\n');
 }
 
 async function runGranularityTests() {
   console.log('====================================================');
-  console.log('  LEGAL LENS CLAUSE GRANULARITY & DENSITY REGRESSION TEST');
+  console.log('  GOVSCHEME DIFF SECTION GRANULARITY & PAGE TEST');
   console.log('====================================================\n');
 
   let passed = true;
-  const fixturesDir = path.resolve(process.cwd(), 'server/src/tests/fixtures');
 
-  // Test 1: 01_rental_agreement.txt
-  const rentalPath = path.join(fixturesDir, '01_rental_agreement.txt');
-  if (fs.existsSync(rentalPath)) {
-    const text = fs.readFileSync(rentalPath, 'utf8');
-    const clauses = chunkDocumentTextIntoClauses(text);
-    console.log(`Test 1: 01_rental_agreement.txt -> ${clauses.length} clauses extracted.`);
-    if (clauses.length >= 8 && clauses.length <= 14) {
-      console.log(`✅ [PASS] 01_rental_agreement.txt count (${clauses.length}) is within sane range (8-14).`);
-    } else {
-      console.error(`❌ [FAIL] 01_rental_agreement.txt count (${clauses.length}) is out of bounds.`);
-      passed = false;
-    }
-  }
+  // Test 1: Multi-page Circular Chunking & Sub-point Grouping
+  const circularText = buildMultiPageGovernmentCircularText();
+  const sections = chunkDocumentTextIntoClauses(circularText);
+  console.log(`Test 1: 10-Page Circular -> ${sections.length} top-level sections extracted.`);
 
-  // Test 2: 04_employment_contract.txt
-  const empPath = path.join(fixturesDir, '04_employment_contract.txt');
-  if (fs.existsSync(empPath)) {
-    const text = fs.readFileSync(empPath, 'utf8');
-    const clauses = chunkDocumentTextIntoClauses(text);
-    console.log(`Test 2: 04_employment_contract.txt -> ${clauses.length} clauses extracted.`);
-    if (clauses.length >= 8 && clauses.length <= 14) {
-      console.log(`✅ [PASS] 04_employment_contract.txt count (${clauses.length}) is within sane range (8-14).`);
-    } else {
-      console.error(`❌ [FAIL] 04_employment_contract.txt count (${clauses.length}) is out of bounds.`);
-      passed = false;
-    }
-  }
-
-  // Test 3: 30-Page Enterprise Agreement PDF Text
-  const text30 = buildSynthetic30PageContractText();
-  const clauses30 = chunkDocumentTextIntoClauses(text30);
-  console.log(`Test 3: 30-Page Contract -> ${clauses30.length} clauses extracted (Expected ~30-32, Old code produced 120-152).`);
-  if (clauses30.length >= 25 && clauses30.length <= 35) {
-    console.log(`✅ [PASS] 30-Page Contract clause count (${clauses30.length}) correctly matches top-level provision count!`);
+  if (sections.length >= 10 && sections.length <= 15) {
+    console.log(`✅ [PASS] Section count (${sections.length}) matches top-level circular sections without over-fragmentation.`);
   } else {
-    console.error(`❌ [FAIL] 30-Page Contract clause count (${clauses30.length}) is out of expected 25-35 range.`);
+    console.error(`❌ [FAIL] Section count (${sections.length}) out of expected range (10-15).`);
     passed = false;
   }
 
-  // Verify sub-points are contained within main clause content, not split
-  const defClause = clauses30.find((c) => c.title.includes('DEFINITIONS'));
-  if (defClause && defClause.original_text.includes('1.1 Applicable Law') && defClause.original_text.includes('1.4 Force Majeure')) {
-    console.log(`✅ [PASS] Sub-points (1.1, 1.2, 1.3, 1.4) are grouped inside single top-level Definitions clause!`);
+  // Test 2: Sub-points grouped under parent section
+  const eligSection = sections.find((s) => s.title.toUpperCase().includes('ELIGIBILITY'));
+  if (
+    eligSection &&
+    eligSection.original_text.includes('2.1 Applicants') &&
+    eligSection.original_text.includes('(a) Must hold valid land passbook') &&
+    eligSection.page_number === 1 &&
+    eligSection.section_reference === 'Section 2'
+  ) {
+    console.log(`✅ [PASS] Sub-points (2.1, (a), (b)) grouped cleanly with page_number=1 and section_reference="Section 2".`);
   } else {
-    console.error(`❌ [FAIL] Sub-points were not correctly grouped inside top-level clause.`);
+    console.error('❌ [FAIL] Eligibility section grouping/metadata check failed:', eligSection);
+    passed = false;
+  }
+
+  // Test 3: Page 10 Annexure preservation (no raw --- Page 10 --- leaked into text)
+  const annexSection = sections.find((s) => s.section_reference === 'Annexure I');
+  if (
+    annexSection &&
+    annexSection.page_number === 10 &&
+    !annexSection.original_text.includes('--- Page') &&
+    annexSection.clause_type === 'required documents'
+  ) {
+    console.log(`✅ [PASS] Annexure I preserved page_number=10, section_reference="Annexure I", and stripped raw page markers.`);
+  } else {
+    console.error('❌ [FAIL] Annexure I page/reference check failed:', annexSection);
+    passed = false;
+  }
+
+  // Test 4: Named Headings Without Numbers (Circular style)
+  const namedCircular = `--- Page 1 ---
+CIRCULAR NO. EDU/2026/05
+Department of Higher Education
+
+Eligibility Criteria:
+Students enrolled in recognized degree courses with family income below Rs. 2,50,000.
+
+Required Documents:
+Income certificate, Aadhaar card, and college bonafide certificate.
+
+--- Page 2 ---
+Last Date:
+Applications close on 15th October 2026.`;
+
+  const namedSections = chunkDocumentTextIntoClauses(namedCircular);
+  const docsSec = namedSections.find((s) => s.clause_type === 'required documents');
+  const deadlineSec = namedSections.find((s) => s.clause_type === 'deadlines & validity');
+
+  if (docsSec && docsSec.page_number === 1 && deadlineSec && deadlineSec.page_number === 2) {
+    console.log(`✅ [PASS] Unnumbered circular headings parsed cleanly across pages 1 and 2 (${namedSections.length} sections).`);
+  } else {
+    console.error('❌ [FAIL] Unnumbered circular heading test failed:', namedSections);
     passed = false;
   }
 
   if (!passed) {
     process.exit(1);
   }
+  console.log('\n🟢 ALL PHASE 2 SECTION CHUNKING & PAGE PRESERVATION TESTS PASSED!\n');
 }
 
 runGranularityTests().catch((err) => {

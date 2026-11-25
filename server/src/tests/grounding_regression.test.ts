@@ -1,143 +1,84 @@
-import fs from 'fs';
-import path from 'path';
+import assert from 'assert';
 import { analyzeDocumentText } from '../services/astraBackend';
-const __dirname = path.resolve(process.cwd(), 'server/src/tests');
+
+const CIRCULAR_FIXTURES = [
+  {
+    desc: 'Rural Housing Scheme Circular',
+    text: `--- Page 1 ---
+GOVERNMENT OF INDIA
+Government Order No. RD-402/2025
+Subject: Rural Housing Assistance Scheme Circular
+
+1. Eligibility Criteria
+Permanent residents aged 21 to 60 years with family income up to Rs. 3,00,000 may apply.
+
+2. Exclusions and Disqualifications
+Income tax payers and existing pucca house owners are excluded and rejected.
+
+3. Financial Benefits
+Eligible households receive Rs. 1,50,000 in three bank installments.
+
+4. Required Documents
+Submit Aadhaar Card, Ration Card, and Income Certificate.
+
+5. Application Deadline
+Apply online on or before 31 May 2026.`,
+    minSections: 5,
+  },
+  {
+    desc: 'State Student Scholarship Circular',
+    text: `--- Page 1 ---
+DEPARTMENT OF HIGHER EDUCATION
+Notification No. EDN-118/2025
+Subject: Post-Matric Student Scholarship Guidelines
+
+1. Scheme Overview and Objective
+Financial assistance for college students from lower-income families.
+
+2. Eligibility and Income Limit
+Minimum 50% marks and annual family income up to Rs. 2,50,000 required.
+
+3. Scholarship Benefits
+Tuition grant up to Rs. 25,000 per year via DBT.
+
+4. Application Deadline
+Online applications close on 15 July 2026.`,
+    minSections: 4,
+  },
+];
 
 async function runGroundingRegressionTests() {
   console.log('====================================================');
-  console.log('  LEGAL LENS GROUNDING & CONSISTENCY REGRESSION SUITE');
+  console.log('  GOVSCHEME-DIFF GROUNDING & CONSISTENCY SUITE');
   console.log('====================================================\n');
 
-  const fixturesDir = path.join(__dirname, 'fixtures');
-  
-  const testFiles = [
-    {
-      file: '01_rental_agreement.txt',
-      desc: '01_rental_agreement.txt (Residential Lease)',
-      expectedClauseCount: 9,
-      expectedHighRiskCount: 1, // Indemnity (#6)
-      expectedWatchOutTypes: ['security deposit', 'notice period', 'term & termination'],
-      prohibitedMissingTerms: ['dispute resolution', 'notice period'],
-      disallowedTypes: {
-        'Maintenance and Repairs': ['parties & recitals'],
+  for (const fixture of CIRCULAR_FIXTURES) {
+    const result = await analyzeDocumentText(fixture.text);
+    assert(result.clauses.length >= fixture.minSections, `${fixture.desc}: expected >=${fixture.minSections} sections`);
+
+    // Badge <-> one_line_consequence consistency
+    for (const c of result.clauses) {
+      const cons = c.one_line_consequence.toLowerCase();
+      if (c.risk_level === 'high') {
+        assert(cons.startsWith('important') || cons.startsWith('high risk'), `Unexpected prefix for high condition on ${c.title}: ${c.one_line_consequence}`);
+      } else if (c.risk_level === 'watch_out') {
+        assert(cons.startsWith('check carefully') || cons.startsWith('watch out'), `Unexpected prefix for watch_out on ${c.title}: ${c.one_line_consequence}`);
+      } else {
+        assert(!cons.startsWith('important') && !cons.startsWith('high risk'), `Low info badge has high prefix on ${c.title}`);
       }
-    },
-    {
-      file: '03_nda.txt',
-      desc: '03_nda.txt (Mutual Non-Disclosure Agreement)',
-      expectedClauseCount: 6,
-      expectedHighRiskCount: 2, // Indemnity (#4), Non-Compete (#5)
-      prohibitedMissingTerms: ['dispute resolution', 'governing law', 'confidentiality', 'indemnity'],
-      disallowedTypes: {}
-    },
-    {
-      file: '04_employment_contract.txt',
-      desc: '04_employment_contract.txt (Employment Agreement)',
-      expectedClauseCount: 8,
-      expectedHighRiskCount: 2, // Bond (#3), Non-Compete (#4)
-      prohibitedMissingTerms: ['dispute resolution', 'notice period', 'governing law', 'confidentiality'],
-      disallowedTypes: {}
-    }
-  ];
-
-  let totalPassed = 0;
-  let totalFailed = 0;
-
-  for (const testCase of testFiles) {
-    const filePath = path.join(fixturesDir, testCase.file);
-    if (!fs.existsSync(filePath)) {
-      console.error(`❌ Test file missing: ${filePath}`);
-      totalFailed++;
-      continue;
+      assert(!/[\u0900-\u097F\u0C80-\u0CFF]/.test(c.simple_explanation || ''), `Must be English-only: ${c.title}`);
     }
 
-    const text = fs.readFileSync(filePath, 'utf-8');
-
-    try {
-      const result = await analyzeDocumentText(text);
-
-      console.log(`🔍 Testing ${testCase.desc}...`);
-
-      // Assertion 1: Signature block exclusion
-      const signatureClause = result.clauses.find((c) =>
-        /in witness whereof|signed and delivered|authorized signatory/i.test(c.original_text)
-      );
-      if (signatureClause) {
-        throw new Error(`Signature/execution block was included as a numbered clause: "${signatureClause.title}"`);
-      }
-      console.log(`   ✅ Signature block excluded cleanly (${result.clauses.length} extracted clauses)`);
-
-      // Assertion 2: High-risk count matching flagged_issues count exactly
-      const actualHighRiskCount = result.clauses.filter((c) => c.risk_level === 'high').length;
-      const flaggedIssuesCount = result.lawyer_briefing.flagged_issues.length;
-
-      if (flaggedIssuesCount !== actualHighRiskCount) {
-        throw new Error(`Lawyer briefing flagged_issues count (${flaggedIssuesCount}) does not match high risk clause count (${actualHighRiskCount})`);
-      }
-      console.log(`   ✅ Lawyer Briefing high-risk count (${flaggedIssuesCount}) matches extracted high-risk count (${actualHighRiskCount})`);
-
-      // Assertion 3: Prohibited missing protective clauses
-      for (const term of testCase.prohibitedMissingTerms) {
-        const isFalselyClaimedMissing = result.lawyer_briefing.missing_protective_clauses.some((m) =>
-          m.toLowerCase().includes(term.toLowerCase())
-        );
-        if (isFalselyClaimedMissing) {
-          throw new Error(`Lawyer briefing falsely listed "${term}" under missing protective clauses when it exists in document!`);
-        }
-      }
-      console.log(`   ✅ Lawyer Briefing missing protective clauses list (${JSON.stringify(result.lawyer_briefing.missing_protective_clauses)}) is grounded & accurate`);
-
-      // Assertion 4: Badge <-> Reasoning text synchronization (zero contradiction)
-      for (const c of result.clauses) {
-        const cons = c.one_line_consequence.toLowerCase();
-        if (c.risk_level === 'high' && !cons.startsWith('high risk')) {
-          throw new Error(`Clause #${c.clause_number} (${c.title}) has High Risk badge but consequence is "${c.one_line_consequence}"`);
-        }
-        if (((c.risk_level as string) === 'medium' || c.risk_level === 'watch_out') && !cons.startsWith('watch out')) {
-          throw new Error(`Clause #${c.clause_number} (${c.title}) has Watch Out badge but consequence is "${c.one_line_consequence}"`);
-        }
-        if (c.risk_level === 'low' && (cons.startsWith('high risk') || cons.startsWith('watch out'))) {
-          throw new Error(`Clause #${c.clause_number} (${c.title}) has Low Risk badge but consequence starts with "${c.one_line_consequence}"`);
-        }
-      }
-      console.log(`   ✅ All ${result.clauses.length} clause risk badges agree 100% with their reasoning text`);
-
-      // Assertion 5: Disallowed clause type mistagging
-      for (const [titleSubstring, badTypes] of Object.entries(testCase.disallowedTypes)) {
-        const matchedClause = result.clauses.find((c) => c.title.toLowerCase().includes(titleSubstring.toLowerCase()));
-        if (matchedClause) {
-          if (badTypes.includes(matchedClause.clause_type as any)) {
-            throw new Error(`Clause "${matchedClause.title}" was mistagged as "${matchedClause.clause_type}"`);
-          }
-        }
-      }
-      console.log(`   ✅ Clause taxonomy type tagging verified accurate`);
-
-      // Assertion 6: Security deposit Watch Out rule (if applicable)
-      const depositClause = result.clauses.find((c) => c.clause_type === 'security deposit');
-      if (depositClause && testCase.file === '01_rental_agreement.txt') {
-        if (depositClause.risk_level !== 'watch_out' && (depositClause.risk_level as string) !== 'medium') {
-          throw new Error(`Security deposit clause lacking fixed refund days in 01_rental_agreement.txt was tagged ${depositClause.risk_level} instead of Watch Out (medium)`);
-        }
-        console.log(`   ✅ Security deposit clause correctly tagged Watch Out (medium) due to refund deadline ambiguity`);
-      }
-
-      console.log(`----------------------------------------------------`);
-      totalPassed++;
-    } catch (err: any) {
-      console.error(`❌ [FAIL] ${testCase.desc}`);
-      console.error(`   Error: ${err.message}\n`);
-      totalFailed++;
-    }
+    const actualHighCount = result.clauses.filter((c) => c.risk_level === 'high').length;
+    const flaggedCount = result.lawyer_briefing.flagged_issues.length;
+    assert.strictEqual(flaggedCount, actualHighCount, `${fixture.desc}: flagged_issues (${flaggedCount}) != high count (${actualHighCount})`);
+    console.log(`✅ [PASS] ${fixture.desc}: ${result.clauses.length} sections, ${flaggedCount} important exclusions grounded.`);
   }
 
-  console.log(`\n====================================================`);
-  console.log(` SUMMARY: ${totalPassed} Passed, ${totalFailed} Failed out of ${testFiles.length} Test Files`);
-  console.log(`====================================================\n`);
-
-  if (totalFailed > 0) {
-    process.exit(1);
-  }
+  console.log('\n🟢 ALL GROUNDING & CONSISTENCY TESTS PASSED!');
 }
 
-runGroundingRegressionTests();
+runGroundingRegressionTests().catch((err) => {
+  console.error('❌ Test failed:', err);
+  process.exit(1);
+});

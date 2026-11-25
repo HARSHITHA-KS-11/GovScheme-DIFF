@@ -1,9 +1,9 @@
 {
-  "name": "legallens",
+  "name": "govscheme-diff",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "LegalLens — Accessible AI Legal Assistant & Contract Risk Auditing Platform",
+  "description": "GovScheme Diff — Plain-English Government Scheme Circular Explainer & Policy Diff Platform",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:client": "vite",
@@ -11,10 +11,10 @@
     "build": "tsc && vite build && npm run build:server",
     "build:client": "tsc && vite build",
     "build:server": "tsc -p server/tsconfig.json && node -e \"require('fs').writeFileSync('dist-server/package.json', JSON.stringify({type:'commonjs'}))\"",
-    "test": "npx tsx server/src/tests/analyze_document_e2e.test.ts && npx tsx server/src/tests/compare_matrix_e2e.test.ts && npx tsx server/src/tests/direct_guard1_verification.ts && npx tsx src/tests/ical_exporter.test.ts",
+    "test": "npx tsx server/src/tests/direct_guard1_verification.ts && npx tsx server/src/tests/guardrails.test.ts && npx tsx server/src/tests/guard1_comprehensive.test.ts && npx tsx server/src/tests/pdf_comprehensive.test.ts && npx tsx server/src/tests/clause_granularity_density.test.ts && npx tsx server/src/tests/compare_fix_validation.test.ts && npx tsx server/src/tests/compare_mixed_validation.test.ts && npx tsx server/src/tests/govscheme_ai_responses.test.ts && npx tsx server/src/tests/actionable_outputs.test.ts && npx tsx server/src/tests/pipeline.test.ts && npx tsx server/src/tests/pipeline_bugs.test.ts && npx tsx server/src/tests/grounding_regression.test.ts && npx tsx server/src/tests/navigation_ui.test.ts && npx tsx src/tests/ical_exporter.test.ts",
     "test:unit": "npx tsx src/tests/ical_exporter.test.ts && npx tsx src/tests/document_limits.test.ts",
-    "test:integration": "npx tsx server/src/tests/direct_guard1_verification.ts && npx tsx server/src/tests/guardrails.test.ts",
-    "test:e2e": "npx tsx server/src/tests/analyze_document_e2e.test.ts && npx tsx server/src/tests/compare_matrix_e2e.test.ts",
+    "test:integration": "npx tsx server/src/tests/direct_guard1_verification.ts && npx tsx server/src/tests/guardrails.test.ts && npx tsx server/src/tests/guard1_comprehensive.test.ts && npx tsx server/src/tests/pdf_comprehensive.test.ts && npx tsx server/src/tests/govscheme_ai_responses.test.ts",
+    "test:e2e": "npx tsx server/src/tests/compare_fix_validation.test.ts && npx tsx server/src/tests/pipeline.test.ts && npx tsx server/src/tests/actionable_outputs.test.ts",
     "start": "node dist-server/server/src/index.js",
     "preview": "vite preview"
   },

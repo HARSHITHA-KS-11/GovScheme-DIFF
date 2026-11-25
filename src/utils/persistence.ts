@@ -1,4 +1,4 @@
-// LegalLens - Client Session State Persistence Engine
+// GovScheme Diff - Client Session State Persistence Engine
 
 export const CURRENT_SCHEMA_VERSION = 1;
 export const ERROR_STALENESS_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
@@ -144,7 +144,7 @@ export function removeStorage(key: string): void {
 }
 
 /**
- * Clear all LegalLens session storage keys for a specific feature prefix
+ * Clear all GovScheme Diff session storage keys for a specific feature prefix
  */
 export function clearFeatureStorage(prefix: string): void {
   if (typeof window === 'undefined') return;

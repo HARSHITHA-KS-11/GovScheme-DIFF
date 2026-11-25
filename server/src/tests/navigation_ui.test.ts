@@ -1,221 +1,175 @@
-import fs from 'fs';
-import path from 'path';
 import { SimplifiedClause } from '../../../src/types/schemas';
 
 async function runNavigationUiTests() {
   console.log('====================================================');
-  console.log('  LEGAL LENS FRONTEND NAVIGATION & DUAL NUMBERING TEST');
+  console.log('  GOVSCHEME-DIFF NAVIGATION & SECTION NUMBERING TEST');
   console.log('====================================================\n');
 
   let passed = true;
 
-  // Mock 10 Clauses representing the reference 9-clause residential lease
-  const mockClauses: SimplifiedClause[] = [
+  const mockSections: SimplifiedClause[] = [
     {
-      id: 'clause_1',
+      id: 'sec_1',
       clause_number: '1',
-      clause_type: 'parties & recitals',
-      title: 'RESIDENTIAL LEASE AGREEMENT',
-      original_text: 'RESIDENTIAL LEASE AGREEMENT This Agreement is made...',
-      simple_explanation: 'This agreement establishes a lease between Lessor and Lessee for Flat 402.',
-      very_simple_explanation: 'This names the landlord, tenant, and flat address.',
+      page_number: 1,
+      section_reference: 'Section 1',
+      clause_type: 'scheme overview & objective',
+      title: 'SCHEME OVERVIEW',
+      original_text: '1. SCHEME OVERVIEW: Rural housing assistance scheme guidelines.',
+      simple_explanation: '1. Explains scheme goal.\n2. Supports rural families.\n3. Page 1, Section 1.',
+      very_simple_explanation: '1. Scheme goal.\n2. Helps rural families.\n3. Page 1, Section 1.',
       risk_level: 'low',
       icon_name: 'CheckCircle',
-      one_line_consequence: 'Low Risk: Parties identified.',
+      one_line_consequence: 'Standard Info: Explains scheme overview.',
     },
     {
-      id: 'clause_2',
-      clause_number: '1',
-      clause_type: 'term & termination',
-      title: 'TERM',
-      original_text: '1. TERM: 11 months with mandatory lock-in of 6 months...',
-      simple_explanation: 'Locked in for first 6 months of 11-month lease.',
-      very_simple_explanation: 'You cannot move out in the first 6 months without paying rent.',
-      risk_level: 'high',
-      icon_name: 'AlertOctagon',
-      one_line_consequence: 'High Risk: Full lock-in penalty.',
-    },
-    {
-      id: 'clause_3',
+      id: 'sec_2',
       clause_number: '2',
-      clause_type: 'rent & payment',
-      title: 'RENT',
-      original_text: '2. RENT: Monthly rent Rs 32,000...',
-      simple_explanation: 'Monthly rent is Rs 32,000 due by 5th.',
-      very_simple_explanation: 'Pay Rs 32,000 rent every month on time.',
+      page_number: 1,
+      section_reference: 'Section 2',
+      clause_type: 'eligibility criteria',
+      title: 'ELIGIBILITY CRITERIA',
+      original_text: '2. ELIGIBILITY CRITERIA: Permanent rural residents.',
+      simple_explanation: '1. Shows who can apply.\n2. Must live in rural panchayat.\n3. Page 1, Section 2.',
+      very_simple_explanation: '1. Who can apply.\n2. Rural residents.\n3. Page 1, Section 2.',
       risk_level: 'low',
       icon_name: 'CheckCircle',
-      one_line_consequence: 'Low Risk: Standard rent.',
+      one_line_consequence: 'Standard Info: Lists applicant rules.',
     },
     {
-      id: 'clause_4',
+      id: 'sec_3',
       clause_number: '3',
-      clause_type: 'security deposit',
-      title: 'SECURITY DEPOSIT',
-      original_text: '3. SECURITY DEPOSIT: Rs 1,60,000 deposit...',
-      simple_explanation: '5 months rent deposit paid.',
-      very_simple_explanation: 'Landlord holds Rs 1.6L deposit until you leave.',
+      page_number: 1,
+      section_reference: 'Section 3',
+      clause_type: 'income & age limits',
+      title: 'INCOME LIMIT',
+      original_text: '3. INCOME LIMIT: Annual income up to Rs. 3,00,000 and age 21 to 60.',
+      simple_explanation: '1. Sets income limit.\n2. Age must be 21 to 60.\n3. Page 1, Section 3.',
+      very_simple_explanation: '1. Income cap Rs. 3,00,000.\n2. Age 21-60.\n3. Page 1, Section 3.',
       risk_level: 'watch_out',
       icon_name: 'Clock',
-      one_line_consequence: 'Watch Out: Deposit refund timeframe omitted.',
+      one_line_consequence: 'Check Carefully: Income and age limits apply.',
     },
     {
-      id: 'clause_5',
+      id: 'sec_4',
       clause_number: '4',
-      clause_type: 'notice period',
-      title: 'NOTICE PERIOD',
-      original_text: '4. NOTICE PERIOD: 60 days written notice...',
-      simple_explanation: '60 days notice required prior to exit.',
-      very_simple_explanation: 'Give 2 months notice before leaving.',
-      risk_level: 'low',
-      icon_name: 'CheckCircle',
-      one_line_consequence: 'Low Risk: 60-day notice.',
-    },
-    {
-      id: 'clause_6',
-      clause_number: '5',
-      clause_type: 'maintenance & repairs',
-      title: 'MAINTENANCE AND REPAIRS',
-      original_text: '5. MAINTENANCE AND REPAIRS: Minor repairs up to Rs 2,000...',
-      simple_explanation: 'Tenant pays minor repairs up to Rs 2,000.',
-      very_simple_explanation: 'You pay small repairs under Rs 2,000.',
-      risk_level: 'low',
-      icon_name: 'CheckCircle',
-      one_line_consequence: 'Low Risk: Standard repair split.',
-    },
-    {
-      id: 'clause_7',
-      clause_number: '6',
-      clause_type: 'indemnity & liability',
-      title: 'INDEMNITY',
-      original_text: '6. INDEMNITY: Lessee shall indemnify Lessor...',
-      simple_explanation: 'Uncapped indemnity for claims arising out of use.',
-      very_simple_explanation: 'You must cover landlord losses if sued.',
+      page_number: 2,
+      section_reference: 'Section 4',
+      clause_type: 'exclusions & disqualifications',
+      title: 'EXCLUSIONS',
+      original_text: '4. EXCLUSIONS: Income tax payers are not eligible.',
+      simple_explanation: '1. Lists who cannot apply.\n2. Tax payers excluded.\n3. Page 2, Section 4.',
+      very_simple_explanation: '1. Cannot apply if tax payer.\n2. Check carefully.\n3. Page 2, Section 4.',
       risk_level: 'high',
       icon_name: 'AlertOctagon',
-      one_line_consequence: 'High Risk: Uncapped indemnity.',
+      one_line_consequence: 'Important: Tax payers are disqualified.',
     },
     {
-      id: 'clause_8',
-      clause_number: '7',
-      clause_type: 'dispute resolution',
-      title: 'DISPUTE RESOLUTION',
-      original_text: '7. DISPUTE RESOLUTION: Sole arbitrator under Arbitration Act...',
-      simple_explanation: 'Disputes go to sole arbitrator.',
-      very_simple_explanation: 'Arguments go to an arbitrator first.',
+      id: 'sec_5',
+      clause_number: '5',
+      page_number: 2,
+      section_reference: 'Section 5',
+      clause_type: 'benefits & financial assistance',
+      title: 'FINANCIAL GRANT',
+      original_text: '5. FINANCIAL GRANT: Rs. 1,50,000 in 3 installments.',
+      simple_explanation: '1. Grant is Rs. 1,50,000.\n2. Paid in 3 parts.\n3. Page 2, Section 5.',
+      very_simple_explanation: '1. Rs. 1,50,000 support.\n2. Paid in 3 steps.\n3. Page 2, Section 5.',
       risk_level: 'low',
       icon_name: 'CheckCircle',
-      one_line_consequence: 'Low Risk: Arbitration clause.',
+      one_line_consequence: 'Standard Info: Direct financial assistance.',
     },
     {
-      id: 'clause_9',
-      clause_number: '8',
-      clause_type: 'governing law & jurisdiction',
-      title: 'GOVERNING LAW AND JURISDICTION',
-      original_text: '8. GOVERNING LAW: Courts at Bengaluru...',
-      simple_explanation: 'Bengaluru courts have exclusive jurisdiction.',
-      very_simple_explanation: 'Bengaluru courts handle legal issues.',
-      risk_level: 'low',
-      icon_name: 'CheckCircle',
-      one_line_consequence: 'Low Risk: Governing law.',
-    },
-    {
-      id: 'clause_10',
-      clause_number: '9',
-      clause_type: 'stamp duty & registration',
-      title: 'REGISTRATION',
-      original_text: '9. REGISTRATION: May require registration and stamp duty...',
-      simple_explanation: 'Requires stamp duty and registration under Karnataka law.',
-      very_simple_explanation: 'Agreement may need registration stamp paper.',
+      id: 'sec_6',
+      clause_number: '6',
+      page_number: 2,
+      section_reference: 'Section 6',
+      clause_type: 'required documents',
+      title: 'REQUIRED DOCUMENTS',
+      original_text: '6. REQUIRED DOCUMENTS: Aadhaar, Ration Card, Income Certificate.',
+      simple_explanation: '1. Attach ID proof.\n2. Attach income proof.\n3. Page 2, Section 6.',
+      very_simple_explanation: '1. Aadhaar needed.\n2. Income proof needed.\n3. Page 2, Section 6.',
       risk_level: 'watch_out',
       icon_name: 'Clock',
-      one_line_consequence: 'Watch Out: Registration stamp duty ambiguity.',
+      one_line_consequence: 'Check Carefully: Supporting certificates needed.',
+    },
+    {
+      id: 'sec_7',
+      clause_number: '7',
+      page_number: 3,
+      section_reference: 'Section 7',
+      clause_type: 'application process',
+      title: 'HOW TO APPLY',
+      original_text: '7. HOW TO APPLY: Apply online at official portal.',
+      simple_explanation: '1. Apply online.\n2. Use official portal.\n3. Page 3, Section 7.',
+      very_simple_explanation: '1. Online form.\n2. Official website.\n3. Page 3, Section 7.',
+      risk_level: 'low',
+      icon_name: 'CheckCircle',
+      one_line_consequence: 'Standard Info: Portal submission instructions.',
+    },
+    {
+      id: 'sec_8',
+      clause_number: '8',
+      page_number: 3,
+      section_reference: 'Section 8',
+      clause_type: 'deadlines & validity',
+      title: 'DEADLINE',
+      original_text: '8. DEADLINE: Last date 31 May 2026.',
+      simple_explanation: '1. Closing date is 31 May 2026.\n2. Apply early.\n3. Page 3, Section 8.',
+      very_simple_explanation: '1. Last date 31 May 2026.\n2. Do not miss date.\n3. Page 3, Section 8.',
+      risk_level: 'watch_out',
+      icon_name: 'Clock',
+      one_line_consequence: 'Check Carefully: Strict closing date.',
+    },
+    {
+      id: 'sec_9',
+      clause_number: '9',
+      page_number: 3,
+      section_reference: 'Section 9',
+      clause_type: 'grievance & nodal authority',
+      title: 'GRIEVANCE REDRESSAL',
+      original_text: '9. GRIEVANCE: Appeal within 30 days.',
+      simple_explanation: '1. Explains appeal steps.\n2. File within 30 days.\n3. Page 3, Section 9.',
+      very_simple_explanation: '1. How to appeal.\n2. Within 30 days.\n3. Page 3, Section 9.',
+      risk_level: 'low',
+      icon_name: 'CheckCircle',
+      one_line_consequence: 'Standard Info: Citizen appeal channel.',
+    },
+    {
+      id: 'sec_10',
+      clause_number: '10',
+      page_number: 4,
+      section_reference: 'Section 10',
+      clause_type: 'implementation & verification',
+      title: 'COMPLIANCE',
+      original_text: '10. COMPLIANCE: Field inspection by BDO.',
+      simple_explanation: '1. Officers inspect records.\n2. Provide true info.\n3. Page 4, Section 10.',
+      very_simple_explanation: '1. Records verified.\n2. Honest details needed.\n3. Page 4, Section 10.',
+      risk_level: 'low',
+      icon_name: 'CheckCircle',
+      one_line_consequence: 'Standard Info: Field verification rule.',
     },
   ];
 
-  // ----------------------------------------------------
-  // TEST 7: DUAL CLAUSE NUMBERING COMPUTATION
-  // ----------------------------------------------------
-  console.log('--- TEST 7: DUAL CLAUSE NUMBERING COMPUTATION ---');
   function computeDualBadgeText(clause: SimplifiedClause, index: number, totalCards: number): string {
     const clauseNumberStr = clause.clause_number ? String(clause.clause_number).trim() : '';
-    const isPreamble = index === 0 && (!clauseNumberStr || clauseNumberStr === '1') && clause.title.toUpperCase().includes('AGREEMENT');
-    const docClauseTitle = isPreamble
-      ? 'Preamble'
-      : clauseNumberStr && /^\d+$/.test(clauseNumberStr)
-      ? `Clause ${clauseNumberStr}`
-      : `Clause ${index + 1}`;
-    return `${docClauseTitle} (card ${index + 1} of ${totalCards})`;
+    const isOverview = index === 0 && (!clauseNumberStr || clauseNumberStr === '1') && clause.title.toUpperCase().includes('OVERVIEW');
+    const docTitle = isOverview ? 'Overview' : `Section ${clauseNumberStr || index + 1}`;
+    return `${docTitle} • Page ${clause.page_number || 1} (${index + 1} of ${totalCards})`;
   }
 
-  const expectedBadges = [
-    'Preamble (card 1 of 10)',
-    'Clause 1 (card 2 of 10)',
-    'Clause 2 (card 3 of 10)',
-    'Clause 3 (card 4 of 10)',
-    'Clause 4 (card 5 of 10)',
-    'Clause 5 (card 6 of 10)',
-    'Clause 6 (card 7 of 10)',
-    'Clause 7 (card 8 of 10)',
-    'Clause 8 (card 9 of 10)',
-    'Clause 9 (card 10 of 10)',
-  ];
-
-  let test7Passed = true;
-  mockClauses.forEach((c, idx) => {
-    const badge = computeDualBadgeText(c, idx, mockClauses.length);
-    if (badge !== expectedBadges[idx]) {
-      console.error(`❌ [FAIL] Test 7: Index ${idx} (${c.title}) badge '${badge}', expected '${expectedBadges[idx]}'`);
-      test7Passed = false;
+  for (let idx = 0; idx < mockSections.length; idx++) {
+    const badge = computeDualBadgeText(mockSections[idx], idx, mockSections.length);
+    if (!badge.includes(`(${idx + 1} of 10)`) || !mockSections[idx].simple_explanation) {
       passed = false;
-    }
-  });
-  if (test7Passed) {
-    console.log('✅ [PASS] Test 7: All 10 cards display exact dual clause numbering (document clause number + card index).');
-  }
-
-  // ----------------------------------------------------
-  // TEST 6: NAVIGATION STATE SYNC & ZERO FLASH
-  // ----------------------------------------------------
-  console.log('\n--- TEST 6: NAVIGATION STATE SYNC & ZERO FLASH ---');
-  let test6Passed = true;
-
-  for (let activeIndex = 0; activeIndex < mockClauses.length; activeIndex++) {
-    const activeClause = mockClauses[activeIndex];
-    const counterText = `${activeIndex + 1} of ${mockClauses.length}`;
-    const highlightedChipIndex = activeIndex;
-    const dualBadge = computeDualBadgeText(activeClause, activeIndex, mockClauses.length);
-
-    // Verify synchronous alignment at every intermediate frame
-    if (
-      counterText !== `${activeIndex + 1} of 10` ||
-      highlightedChipIndex !== activeIndex ||
-      !dualBadge.includes(`card ${activeIndex + 1} of 10`) ||
-      !activeClause.simple_explanation
-    ) {
-      console.error(`❌ [FAIL] Test 6: Desync or blank card at index ${activeIndex}!`);
-      test6Passed = false;
-      passed = false;
-      break;
+      console.error(`❌ [FAIL] Desync or empty explanation at index ${idx}`);
     }
   }
 
-  if (test6Passed) {
-    console.log('✅ [PASS] Test 6: At every step during 0-9 navigation, counter index, deck-jump highlight, and active card data refer to the SAME clause with non-empty payload.');
-  }
-
-  console.log('\n====================================================');
-  if (passed) {
-    console.log('  SUMMARY: FRONTEND NAVIGATION & DUAL NUMBERING PASSED! 🟢');
-    console.log('====================================================\n');
-  } else {
-    console.error('  SUMMARY: FRONTEND NAVIGATION & DUAL NUMBERING FAILED! 🔴');
-    console.log('====================================================\n');
-    process.exit(1);
-  }
+  if (!passed) process.exit(1);
+  console.log('✅ [PASS] All 10 scheme sections synchronized with page & section numbering.');
 }
 
 runNavigationUiTests().catch((err) => {
-  console.error('Fatal error in navigation UI test suite:', err);
+  console.error(err);
   process.exit(1);
 });

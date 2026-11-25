@@ -68,15 +68,20 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
   const riskStyle = getRiskStyle(clause.risk_level, language);
   const RiskIcon = riskStyle.icon;
 
-  // Bug 5: Dual Clause Numbering Computation
   const clauseNumberStr = clause.clause_number ? String(clause.clause_number).trim() : '';
-  const isPreamble = index === 0 && (!clauseNumberStr || clauseNumberStr === '1') && clause.title.toUpperCase().includes('AGREEMENT');
+  const isPreamble = index === 0 && (!clauseNumberStr || clauseNumberStr === '1') && clause.title.toUpperCase().includes('OVERVIEW');
   const docClauseTitle = isPreamble
-    ? 'Preamble'
+    ? 'Overview'
     : clauseNumberStr && /^\d+$/.test(clauseNumberStr)
-      ? `Clause ${clauseNumberStr}`
-      : `Clause ${index + 1}`;
-  const dualBadgeText = `${docClauseTitle} (card ${index + 1} of ${totalCards})`;
+      ? `Section ${clauseNumberStr}`
+      : `Section ${index + 1}`;
+  const citationMeta = [
+    clause.page_number ? `Page ${clause.page_number}` : null,
+    clause.section_reference && !clause.section_reference.toLowerCase().startsWith(docClauseTitle.toLowerCase()) ? clause.section_reference : null,
+  ]
+    .filter(Boolean)
+    .join(' • ');
+  const dualBadgeText = citationMeta ? `${docClauseTitle} • ${citationMeta}` : `${docClauseTitle} (${index + 1} of ${totalCards})`;
 
   // Related Cross-Clause Conflicts
   const relatedConflicts = conflicts.filter(
@@ -125,7 +130,7 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
           {clause.needs_review && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A] flex items-center space-x-1">
               <AlertTriangle className="w-3 h-3 shrink-0" />
-              <span>{language === 'hi' ? 'समीक्षा की आवश्यकता' : 'Needs Review'}</span>
+              <span>Needs Verification</span>
             </span>
           )}
           <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded bg-[#E7E1D3]/70 text-[#6E6659] hidden sm:inline-block">
@@ -148,12 +153,12 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
             {readingLevel === 'very_simple' ? (
               <>
                 <Sparkles className="w-3 h-3 text-[#B85C38]" />
-                <span>{language === 'hi' ? 'सरल अर्थ' : 'Simple Meaning'}</span>
+                <span>Ultra Simple English</span>
               </>
             ) : (
               <>
                 <Zap className="w-3 h-3 text-[#B85C38]" />
-                <span>{language === 'hi' ? 'खंड का अर्थ' : 'Clause Meaning'}</span>
+                <span>Plain English Explanation</span>
               </>
             )}
           </div>
@@ -161,7 +166,7 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
           {clause.meaning_error || !explanationText ? (
             <div data-testid="meaning-error-state" className="bg-[#FFF5F5] rounded-lg p-3 border border-[#FCA5A5] flex items-center justify-between">
               <span className="text-xs font-semibold text-[#991B1B]">
-                {language === 'hi' ? 'इस खंड का अर्थ लोड नहीं हो सका' : 'Meaning temporarily unavailable for this clause'}
+                Explanation temporarily unavailable for this section
               </span>
               <button
                 onClick={(e) => {
@@ -171,15 +176,15 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
                 className="px-2.5 py-1 text-[11px] font-bold bg-[#991B1B] text-white rounded hover:bg-[#7F1D1D] flex items-center space-x-1 cursor-pointer"
               >
                 <RotateCw className="w-3 h-3" />
-                <span>{language === 'hi' ? 'पुनः प्रयास करें' : 'Retry'}</span>
+                <span>Retry</span>
               </button>
             </div>
           ) : (
-            <p className="text-xs font-medium text-[#1E1B17] leading-relaxed">{explanationText}</p>
+            <p className="text-xs font-medium text-[#1E1B17] leading-relaxed whitespace-pre-line">{explanationText}</p>
           )}
         </div>
 
-        {/* Cross-Clause Conflict Badges */}
+        {/* Cross-Section Notes */}
         {relatedConflicts.map((cnf) => {
           const targetClauseId = cnf.clause_a_id === clause.id ? cnf.clause_b_id : cnf.clause_a_id;
           const targetTitle = cnf.clause_a_id === clause.id ? cnf.clause_b_title : cnf.clause_a_title;
@@ -196,17 +201,17 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
               <div className="flex items-center space-x-1.5 min-w-0">
                 <ShieldAlert className="w-4 h-4 shrink-0 text-[#991B1B]" />
                 <span className="truncate">
-                  {language === 'hi' ? `टकराव: ${targetTitle}` : `Collides with ${targetTitle}: ${cnf.description}`}
+                  Conflicts with {targetTitle}: {cnf.description}
                 </span>
               </div>
               <span className="text-[11px] underline font-bold shrink-0 ml-2">
-                {language === 'hi' ? 'खंड देखें' : 'View Clause'}
+                View Section
               </span>
             </div>
           );
         })}
 
-        {/* Traffic Light One-Line Consequence */}
+        {/* Citizen Takeaway Line */}
         <div className="flex items-start space-x-2.5 p-3 rounded-lg bg-[#FBF8F1]/80 border border-[#E7E1D3] text-xs">
           <RiskIcon className="w-4 h-4 shrink-0 mt-0.5 text-[#B85C38]" />
           <p className="text-[#1E1B17] font-medium leading-normal">{clause.one_line_consequence}</p>
@@ -226,7 +231,7 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
                 }`}
             >
               {isPlayingAudio ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5 text-[#B85C38]" />}
-              <span>{isPlayingAudio ? (language === 'hi' ? 'रोकें' : 'Stop') : (language === 'hi' ? 'सुनें' : 'Read')}</span>
+              <span>{isPlayingAudio ? 'Stop' : 'Read'}</span>
             </button>
 
             <button
@@ -237,7 +242,7 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
               className="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-[#F6F1E7] hover:bg-[#E7E1D3]/50 text-[#1E1B17] text-xs font-semibold transition-colors border border-[#E7E1D3]"
             >
               <Search className="w-3.5 h-3.5 text-[#065F46]" />
-              <span>{language === 'hi' ? 'जाँचें' : 'Verify'}</span>
+              <span>Verify</span>
             </button>
           </div>
 
@@ -249,7 +254,7 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-[#F6F1E7] hover:bg-[#E7E1D3]/50 text-[#1E1B17] text-xs font-semibold transition-colors border border-[#E7E1D3]"
           >
             <Share2 className="w-3.5 h-3.5 text-[#B85C38]" />
-            <span>{language === 'hi' ? 'शेयर' : 'Share'}</span>
+            <span>Share</span>
           </button>
         </div>
       </div>

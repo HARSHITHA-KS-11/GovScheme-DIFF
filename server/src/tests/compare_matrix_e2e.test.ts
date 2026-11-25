@@ -51,8 +51,8 @@ async function simulateParallelComparePipeline(
     }
 
     const g1 = runGuard1InputGate(text);
-    if (!g1.is_legal_document) {
-      throw new Error(g1.rejection_reason || 'Document rejected by Guard 1: Not a valid legal document.');
+    if (!g1.is_valid_circular) {
+      throw new Error(g1.rejection_reason || 'Document rejected by Guard 1: Not a valid government scheme circular.');
     }
 
     return await analyzeDocumentText(text, input.filename || docName);

@@ -67,10 +67,6 @@ export class ApiClient {
   }
 
   private static getActiveLanguage(): SupportedLanguage {
-    try {
-      const saved = localStorage.getItem('legallens_language');
-      if (saved === 'kn' || saved === 'hi' || saved === 'en') return saved;
-    } catch { }
     return 'en';
   }
 

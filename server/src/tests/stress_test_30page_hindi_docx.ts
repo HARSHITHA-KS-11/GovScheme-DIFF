@@ -43,12 +43,12 @@ async function run30PageHindiDocxStressTest() {
   console.log(`   Sample End: "...${textA.slice(-150)}"`);
 
   const g1A = await runGuard1InputGateAsync(textA);
-  console.log(`2. Guard 1 Classification: ${g1A.is_legal_document ? 'ACCEPTED ✅' : 'REJECTED ❌'}`);
+  console.log(`2. Guard 1 Classification: ${g1A.is_valid_circular ? 'ACCEPTED ✅' : 'REJECTED ❌'}`);
   console.log(`   Category: ${g1A.category} | Confidence: ${g1A.confidence}`);
   if (g1A.rejection_reason) console.log(`   Rejection Reason: "${g1A.rejection_reason}"`);
 
-  if (!g1A.is_legal_document) {
-    console.error('❌ [FAIL] Hindi File A was WRONGLY REJECTED by Guard 1!');
+  if (!g1A.is_valid_circular) {
+    console.error('❌ [FAIL] File A was WRONGLY REJECTED by Guard 1!');
   } else {
     console.log('3. Chunking document into clauses...');
     const clausesA = await chunkDocumentTextIntoClausesAsync(textA);
@@ -85,16 +85,16 @@ async function run30PageHindiDocxStressTest() {
   console.log(`   Sample Start: "${textB.slice(0, 150)}..."`);
 
   const g1B = await runGuard1InputGateAsync(textB);
-  console.log(`2. Guard 1 Classification: ${g1B.is_legal_document ? 'ACCEPTED (WRONG!) ❌' : 'REJECTED (CORRECT!) ✅'}`);
+  console.log(`2. Guard 1 Classification: ${g1B.is_valid_circular ? 'ACCEPTED (WRONG!) ❌' : 'REJECTED (CORRECT!) ✅'}`);
   console.log(`   Category: ${g1B.category} | Confidence: ${g1B.confidence}`);
   if (g1B.rejection_reason) console.log(`   Rejection Reason: "${g1B.rejection_reason}"`);
-  console.log(`   Elapsed Time Hindi File B: ${Date.now() - tB0} ms`);
+  console.log(`   Elapsed Time File B: ${Date.now() - tB0} ms`);
 
   console.log('\n======================================================');
-  console.log('📊 HINDI RESULTS SUMMARY');
+  console.log('📊 RESULTS SUMMARY');
   console.log('======================================================');
-  console.log(`Hindi File A (Legal Doc): ${g1A.is_legal_document ? 'PASS ✅' : 'FAIL ❌'}`);
-  console.log(`Hindi File B (Non-Legal Doc): ${!g1B.is_legal_document ? 'PASS ✅' : 'FAIL ❌'}`);
+  console.log(`File A (Circular Doc): ${g1A.is_valid_circular ? 'PASS ✅' : 'FAIL ❌'}`);
+  console.log(`File B (Non-Circular Doc): ${!g1B.is_valid_circular ? 'PASS ✅' : 'FAIL ❌'}`);
 }
 
 run30PageHindiDocxStressTest().catch(console.error);

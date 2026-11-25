@@ -401,32 +401,22 @@ export const DocumentCapture: React.FC<DocumentCaptureProps> = ({
 
   const getFileStatusMessage = () => {
     if (isLoading) {
-      return language === 'hi'
-        ? 'दस्तावेज़ का विश्लेषण किया जा रहा है... कृपया प्रतीक्षा करें।'
-        : 'Analyzing document... Please wait while our AI audits key terms.';
+      return 'Analyzing circular... Please wait while key sections are extracted.';
     }
     if (hasCompletedAnalysis) {
-      return language === 'hi'
-        ? 'विश्लेषण पूर्ण। पूर्ण परिणाम नीचे प्रदर्शित हैं। नई फ़ाइल बदलने और फिर से विश्लेषण करने के लिए यहाँ डालें।'
-        : 'Analysis complete. Full results displayed below. Drop another file to replace and re-analyze.';
+      return 'Analysis complete. Full results displayed below. Drop another circular file to replace and re-analyze.';
     }
     return t('capture.file_ready');
   };
 
   const getPastedTextStatusMessage = () => {
     if (isLoading) {
-      return language === 'hi'
-        ? 'पाठ का विश्लेषण किया जा रहा है... कृपया प्रतीक्षा करें।'
-        : 'Analyzing pasted text... Please wait while our AI audits key terms.';
+      return 'Analyzing pasted circular text... Please wait while key sections are extracted.';
     }
     if (hasCompletedAnalysis) {
-      return language === 'hi'
-        ? 'विश्लेषण पूर्ण। पूर्ण परिणाम नीचे प्रदर्शित हैं। नया विश्लेषण शुरू करने के लिए पाठ संपादित करें।'
-        : 'Analysis complete. Full results displayed below. Edit text to re-analyze.';
+      return 'Analysis complete. Full results displayed below. Edit text to re-analyze.';
     }
-    return language === 'hi'
-      ? 'पाठ विश्लेषण के लिए तैयार है। नीचे दिए गए बटन पर क्लिक करें।'
-      : 'Pasted text ready for analysis. Click button below to analyze.';
+    return 'Pasted circular text ready for analysis. Click the button below to analyze.';
   };
 
   const handleSubmitPhoto = () => {
@@ -486,40 +476,47 @@ export const DocumentCapture: React.FC<DocumentCaptureProps> = ({
     }
     setSelectedSample(sampleType);
     if (sampleType === 'rental') {
-      const rentalText = `RESIDENTIAL TENANCY AGREEMENT (BENGALURU, KARNATAKA)
+      const housingCircularText = `GOVERNMENT OF INDIA
+MINISTRY OF RURAL DEVELOPMENT
+Circular No. G.O. RD-402/2025 | Dated: 10th April 2025
+Subject: Rural Housing Assistance Scheme Guidelines (FY 2025-26)
 
-This Agreement is made on this 1st day of April 2026, by and between Mr. Ramesh Sharma (Lessor) and Mr. Ankit Kumar (Lessee).
+1. SCHEME OBJECTIVE & OVERVIEW
+The Ministry of Rural Development sanctions direct financial grant assistance for construction of pucca houses by eligible houseless and kutcha-dwelling rural households during Financial Year 2025-26.
 
-1. PREMISES & LEASE TERM
-The Lessor agrees to rent Flat 302, Green Acres Apartment, Indiranagar, Bengaluru to the Lessee for a period of 11 months starting 1st April 2026.
+2. ELIGIBILITY & ANNUAL INCOME LIMIT
+Applicants must be permanent rural residents appearing in the SECC housing priority register and must not own any pucca house anywhere in India. Total annual household income must not exceed Rs. 3,00,000 from all sources.
 
-2. RENT AND PAYMENT SCHEDULE
-The Monthly rent shall be Rs. 25,000 payable on or before the 5th of each calendar month. A late payment penalty of 5% per week shall apply after the 5th.
+3. FINANCIAL BENEFIT & INSTALLMENTS
+Total financial assistance of Rs. 1,50,000 in plain areas (and Rs. 1,65,000 in hilly districts) shall be transferred directly to the beneficiary Aadhaar-seeded bank account in three equal installments upon geo-tagged plinth, lintel, and roof completion verification.
 
-3. SECURITY DEPOSIT & REFUND CONDITIONS
-The Lessee shall pay an interest-free Security Deposit of Rs. 1,50,000. The Security Deposit shall be returned to the Lessee after 45 days of vacating, subject to deduction of 1 month rent for painting and cleaning.
+4. REQUIRED SUPPORTING DOCUMENTS
+Applicants must submit their Aadhaar Card, valid Tehsildar Income Certificate, Bank Passbook linked with Aadhaar (NPCI mapper active), BPL/SECC Family ID, and Gram Sabha resolution copy.
 
-4. LOCK-IN PERIOD AND EARLY TERMINATION
-There shall be a mandatory lock-in period of 6 months. If the Lessee vacates prior to completion of the lock-in period, the entire Security Deposit of Rs. 1,50,000 shall be forfeited as a penalty.
-
-5. MAINTENANCE AND UTILITY CHARGES
-The Lessee shall pay monthly society maintenance charges of Rs. 3,500 and all electricity/water bills directly to the respective authorities.
-
-6. USE OF PREMISES & SUBLETTING RESTRICTION
-The premises shall be used exclusively for residential purposes by the Lessee and immediate family. Subletting or commercial use is strictly prohibited.
-
-7. ALTERATIONS & PROPERTY FITTINGS
-The Lessee shall not make any structural alterations, paint walls, or drive heavy nails without prior written permission from the Lessor.
-
-8. LANDLORD ENTRY & INSPECTION RIGHTS
-The Lessor reserves the right to enter and inspect the premises with 24 hours prior notice during reasonable hours.
-
-9. INDEMNITY & DAMAGE LIABILITY
-The Lessee agrees to defend, indemnify, and hold harmless the Lessor against all legal claims, damages, or liabilities arising from Lessee's stay.`;
-      onAnalyzeText(rentalText, undefined, 'sample');
+5. APPLICATION WINDOW & DEADLINE
+All completed online applications verified by the Block Development Officer must be uploaded on the Rural Housing Portal on or before 30th September 2025. Incomplete forms or applications filed after 30th September 2025 shall stand rejected.`;
+      onAnalyzeText(housingCircularText, undefined, 'sample');
     } else {
-      const empText = `Employment Offer & Service Agreement\nTechNova Solutions appoints Senior Frontend Engineer at Gurugram office. CTC: ₹12,00,000.\nService Bond: 24 months tenure requirement or ₹3,00,000 training reimbursement penalty.\nNon-compete: 24 months post-employment non-compete restriction. Notice: 90 days.`;
-      onAnalyzeText(empText, undefined, 'sample');
+      const scholarshipCircularText = `GOVERNMENT OF INDIA
+DEPARTMENT OF HIGHER EDUCATION
+Notification No. EDN-118/2025 | Dated: 18th May 2025
+Subject: Post-Matric Scholarship Guidelines for Meritorious Students (Academic Year 2025-26)
+
+1. SCOPE & COVERAGE
+This notification governs renewal and fresh disbursement of Post-Matric Scholarships for eligible students enrolled in Class 11, Class 12, ITI, Diploma, and Undergraduate degree courses at recognized institutions.
+
+2. AGE, MERIT & FAMILY INCOME CRITERIA
+Applicants must be aged between 16 and 28 years as on 1st July 2025, must have scored at least 60% marks in the previous qualifying examination, and must belong to families whose total annual income does not exceed Rs. 2,50,000.
+
+3. SCHOLARSHIP BENEFIT STRUCTURE
+Selected beneficiaries receive full tuition reimbursement up to Rs. 50,000 per academic year plus a monthly maintenance allowance of Rs. 1,200 directly via Direct Benefit Transfer (DBT).
+
+4. MANDATORY DOCUMENTS FOR VERIFICATION
+Students must upload Aadhaar-linked bank passbook details, previous year marksheet, Institutional Bonafide Certificate, valid Caste/Category Certificate where applicable, and an Income Certificate issued within the last 12 months.
+
+5. PORTAL SUBMISSION DEADLINE
+Student applications must be submitted online on the National Scholarship Portal (scholarships.gov.in) on or before 31st October 2025, with Institute Nodal Officer verification completed by 15th November 2025.`;
+      onAnalyzeText(scholarshipCircularText, undefined, 'sample');
     }
   };
 
@@ -768,7 +765,7 @@ The Lessee agrees to defend, indemnify, and hold harmless the Lessor against all
                 <div className="mt-2 p-3 rounded-xl bg-[#FFF5F5] border border-[#FCA5A5] text-[#991B1B] text-xs font-semibold flex items-start space-x-2 shadow-xs animate-fade-in-up">
                   <AlertCircle className="w-4 h-4 text-[#991B1B] shrink-0 mt-0.5" />
                   <span className="flex-1 leading-relaxed">
-                    {language === 'hi' ? MAX_PASTED_WORDS_ERROR_MSG_HI : MAX_PASTED_WORDS_ERROR_MSG}
+                    {MAX_PASTED_WORDS_ERROR_MSG}
                   </span>
                 </div>
               )}
@@ -966,10 +963,10 @@ The Lessee agrees to defend, indemnify, and hold harmless the Lessor against all
                   <span
                     onClick={(e) => handleClearSample(e)}
                     className="px-2 py-0.5 text-[10px] font-bold text-[#991B1B] bg-[#FFF5F5] hover:bg-[#FCA5A5]/40 border border-[#FCA5A5] rounded-md transition-all flex items-center space-x-1 cursor-pointer"
-                    title={language === 'hi' ? 'नमूना विश्लेषण हटाएं' : 'Remove sample analysis'}
+                    title="Remove sample analysis"
                   >
                     <X className="w-3 h-3" />
-                    <span>{language === 'hi' ? 'नमूना हटाएं' : 'Remove Sample'}</span>
+                    <span>Remove Sample</span>
                   </span>
                 ) : (
                   <span className="text-[10px] bg-[#FBF8F1] text-[#6E6659] px-2 py-0.5 rounded border border-[#E7E1D3]">{t('capture.city_bengaluru')}</span>
@@ -1003,10 +1000,10 @@ The Lessee agrees to defend, indemnify, and hold harmless the Lessor against all
                   <span
                     onClick={(e) => handleClearSample(e)}
                     className="px-2 py-0.5 text-[10px] font-bold text-[#991B1B] bg-[#FFF5F5] hover:bg-[#FCA5A5]/40 border border-[#FCA5A5] rounded-md transition-all flex items-center space-x-1 cursor-pointer"
-                    title={language === 'hi' ? 'नमूना विश्लेषण हटाएं' : 'Remove sample analysis'}
+                    title="Remove sample analysis"
                   >
                     <X className="w-3 h-3" />
-                    <span>{language === 'hi' ? 'नमूना हटाएं' : 'Remove Sample'}</span>
+                    <span>Remove Sample</span>
                   </span>
                 ) : (
                   <span className="text-[10px] bg-[#FBF8F1] text-[#6E6659] px-2 py-0.5 rounded border border-[#E7E1D3]">{t('capture.city_gurugram')}</span>

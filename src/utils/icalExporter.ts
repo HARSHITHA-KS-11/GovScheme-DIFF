@@ -118,13 +118,12 @@ function escapeICalText(str: string): string {
 export function buildICalCalendarContent(
   items: ChecklistItem[],
   documentTitle: string,
-  language: SupportedLanguage = 'en',
+  _language: SupportedLanguage = 'en',
   baseDate: Date = new Date()
 ): { icsContent: string; exportCount: number } {
-  const isHi = language === 'hi';
   const now = new Date();
   const dtstamp = formatUtcTimestampToICal(now);
-  const cleanDocTitle = documentTitle || (isHi ? 'कानूनी दस्तावेज़' : 'Legal Agreement');
+  const cleanDocTitle = documentTitle || 'Government Scheme Circular';
 
   let validEventsCount = 0;
   const veventsArr: string[] = [];
@@ -134,21 +133,20 @@ export function buildICalCalendarContent(
     if (!derived) return;
 
     validEventsCount++;
-    const uid = `legallens-item-${index + 1}-${now.getTime()}@legallens.app`;
+    const uid = `govscheme-item-${index + 1}-${now.getTime()}@govschemediff.app`;
     const dtStartStr = formatDateToICal(derived.startDate);
     const dtEndStr = formatDateToICal(derived.endDate);
 
-    const summaryPrefix = isHi ? 'लीगललेंस समय सीमा: ' : 'LegalLens Deadline: ';
-    const summary = escapeICalText(`${summaryPrefix}${item.title}`);
+    const summary = escapeICalText(`GovScheme Diff Deadline: ${item.title}`);
 
-    let descriptionRaw = `${isHi ? 'कार्रवाई' : 'Action'}: ${item.action_required || item.description}`;
+    let descriptionRaw = `Action: ${item.action_required || item.description}`;
     if (item.due_date_or_timeframe) {
-      descriptionRaw += ` | ${isHi ? 'समय सीमा' : 'Timeframe'}: ${item.due_date_or_timeframe}`;
+      descriptionRaw += ` | Timeframe: ${item.due_date_or_timeframe}`;
     }
-    descriptionRaw += ` | ${isHi ? 'दस्तावेज़' : 'Document'}: ${cleanDocTitle}`;
+    descriptionRaw += ` | Circular: ${cleanDocTitle}`;
     const description = escapeICalText(descriptionRaw);
 
-    const alarmSummary = escapeICalText(`${isHi ? 'रिमाइंडर: ' : 'Reminder: '}${item.title}`);
+    const alarmSummary = escapeICalText(`Reminder: ${item.title}`);
 
     const vevent = [
       'BEGIN:VEVENT',
@@ -178,7 +176,7 @@ export function buildICalCalendarContent(
   const icsContent = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//LegalLens//Legal Deadline Reminders//EN',
+    'PRODID:-//GovSchemeDiff//Scheme Deadline Reminders//EN',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     veventsArr.join('\r\n'),

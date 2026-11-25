@@ -76,7 +76,7 @@ app.get(['/api/health', '/health'], (req: Request, res: Response) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    service: 'LegalLens Engine',
+    service: 'GovScheme Diff Engine',
     version: '1.0.0',
   });
 });
@@ -215,12 +215,12 @@ app.post('/api/analyze', (req: Request, res: Response, next: any) => {
       console.log(`🛡️ [STAGE 0: GUARD 1] Evaluating input gate classification...`);
 
       const g1 = await runGuard1InputGateAsync(documentText || '', serverAbortController.signal);
-      console.log(`🛡️ [STAGE 0 RESULT] Legal: ${g1.is_legal_document} | Category: ${g1.category}`);
+      console.log(`🛡️ [STAGE 0 RESULT] Valid Circular: ${g1.is_valid_circular} | Kind: ${g1.document_kind || 'other'} | Category: ${g1.category}`);
       if (checkAborted()) return;
 
-      if (!g1.is_legal_document) {
+      if (!g1.is_valid_circular) {
         console.warn(`❌ [GUARD 1 REJECTED] ${g1.rejection_reason}`);
-        await sendEvent('error', { error: g1.rejection_reason || 'Document rejected by Guard 1 input gate.' });
+        await sendEvent('error', { error: g1.rejection_reason || 'Document rejected by Guard 1: Not a valid government scheme circular or policy document.' });
         if (!res.writableEnded) res.end();
         return;
       }
@@ -261,7 +261,7 @@ app.post('/api/analyze', (req: Request, res: Response, next: any) => {
       if (checkAborted()) return;
 
       if (!rawClauses || rawClauses.length === 0) {
-        await sendEvent('error', { error: 'Document rejected by Guard 1: No extractable legal clauses or binding terms were found in this document.' });
+        await sendEvent('error', { error: 'Document rejected by Guard 1: No extractable scheme sections or policy provisions were found in this circular.' });
         if (!res.writableEnded) res.end();
         return;
       }
@@ -334,18 +334,21 @@ app.post('/api/analyze', (req: Request, res: Response, next: any) => {
     }
     const lang = req.body.language || 'en';
     const textHash = computeHashKey(documentText, lang);
+    let result: any;
     if (analysisCache.has(textHash)) {
       const cached = analysisCache.get(textHash)!;
       if (Date.now() - cached.timestamp < CACHE_TTL_MS) {
         console.log(`⚡ [SHA-256 CACHE HIT] Returning cached non-streaming analysis for hash: ${textHash.slice(0, 12)}...`);
-        res.json(cached.data);
-        return;
+        result = cached.data;
       }
     }
-    const result = await analyzeDocumentText(documentText, req.body.categoryHint, lang);
-    if (result) {
-      analysisCache.set(textHash, { data: result, timestamp: Date.now() });
+    if (!result) {
+      result = await analyzeDocumentText(documentText, req.body.categoryHint, lang);
+      if (result) {
+        analysisCache.set(textHash, { data: result, timestamp: Date.now() });
+      }
     }
+
     res.json(result);
   } catch (err: any) {
     const errMsg = err.message || '';
@@ -401,6 +404,6 @@ app.post('/api/chat', async (req: Request, res: Response) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`⚡ LegalLens Backend running on http://localhost:${PORT}`);
+  console.log(`⚡ GovScheme Diff Backend running on http://localhost:${PORT}`);
   verifyModelAvailabilityHealthCheck().catch((e) => console.warn('Startup health check warning:', e));
 });

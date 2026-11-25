@@ -639,9 +639,7 @@ function AppContent() {
                           Sample Demonstration Mode
                         </div>
                         <span className="font-semibold text-[#1E1B17]">
-                          {language === 'hi'
-                            ? 'आप एक नमूना समझौते (Sample Agreement) का प्रदर्शन विश्लेषण देख रहे हैं।'
-                            : 'You are viewing a sample circular demonstration analysis.'}
+                          You are viewing a sample government circular demonstration analysis.
                         </span>
                       </div>
                     </div>
@@ -651,7 +649,7 @@ function AppContent() {
                       className="px-3.5 py-1.5 bg-[#B85C38] hover:bg-[#9C4B2B] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shadow-xs flex items-center space-x-1.5"
                     >
                       <Upload className="w-3.5 h-3.5" />
-                      <span>{language === 'hi' ? 'अपना खुद का दस्तावेज़ विश्लेषण करें' : 'Analyze Your Own Circular'}</span>
+                      <span>Analyze Your Own Circular</span>
                     </button>
                   </div>
                 )}
@@ -661,50 +659,43 @@ function AppContent() {
                     <div>
                       <div className="flex items-center space-x-2">
                         <span className="text-[10px] uppercase font-bold text-[#B85C38] bg-[#B85C38]/10 px-2.5 py-0.5 rounded border border-[#B85C38]/20">
-                          {documentAnalysis.category || 'Legal Document'}
+                          {documentAnalysis.category || 'Government Circular'}
                         </span>
                         <span className="text-[11px] text-[#065F46] font-semibold flex items-center space-x-1">
                           <ShieldCheck className="w-3.5 h-3.5" />
-                          <span>Guard 1 Verified</span>
+                          <span>Circular Gate Verified</span>
                         </span>
                       </div>
                       <h2 className="text-xl font-bold font-heading text-[#1E1B17] mt-1">
-                        {documentAnalysis.document_title || 'Legal Agreement'}
+                        {documentAnalysis.document_title || 'Government Scheme Circular'}
                       </h2>
                     </div>
 
-                    {/* Overall Risk Score Pill */}
+                    {/* Circular Highlights Pill */}
                     {(() => {
-                      const overallScore = typeof documentAnalysis?.overall_risk_score === 'number' && !isNaN(documentAnalysis.overall_risk_score)
-                        ? documentAnalysis.overall_risk_score
-                        : 0;
-                      const riskText = overallScore > 60 ? 'High Risk' : overallScore > 30 ? 'Moderate Risk' : 'Low Risk';
-                      const riskBadgeColor = overallScore > 60
+                      const highCount = (documentAnalysis.clauses || []).filter((c) => c.risk_level === 'high').length;
+                      const watchCount = (documentAnalysis.clauses || []).filter((c) => c.risk_level === 'watch_out').length;
+                      const statusText = highCount > 0 ? `${highCount} Strict Exclusion(s)` : watchCount > 0 ? `${watchCount} Key Check(s)` : 'Clear Overview';
+                      const badgeColor = highCount > 0
                         ? 'bg-[#FFF5F5] text-[#991B1B] border border-[#FCA5A5]'
-                        : overallScore > 30
+                        : watchCount > 0
                           ? 'bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]'
                           : 'bg-[#ECFDF5] text-[#065F46] border border-[#6EE7B7]';
                       return (
                         <div className="flex flex-wrap items-center gap-2 bg-[#F6F1E7] px-3.5 py-1.5 rounded-lg border border-[#E7E1D3]">
-                          <span className="text-xs font-medium text-[#6E6659]">Risk Assessment:</span>
+                          <span className="text-xs font-medium text-[#6E6659]">Circular Review:</span>
                           <span
-                            className={`text-xs font-bold px-2.5 py-0.5 rounded flex items-center space-x-1 ${riskBadgeColor}`}
+                            className={`text-xs font-bold px-2.5 py-0.5 rounded flex items-center space-x-1 ${badgeColor}`}
                           >
                             <AlertOctagon className="w-3.5 h-3.5 mr-1" />
                             <span>
-                              {riskText} ({overallScore}/100)
+                              {statusText}
                             </span>
                           </span>
                           {(documentAnalysis.conflicts || documentAnalysis.contradictions || []).length > 0 && (
                             <span className="text-xs font-bold px-2.5 py-0.5 rounded bg-[#FEF2F2] text-[#991B1B] border border-[#FCA5A5] flex items-center space-x-1">
                               <ShieldAlert className="w-3.5 h-3.5 mr-1" />
-                              <span>{(documentAnalysis.conflicts || documentAnalysis.contradictions || []).length} Cross-Clause Conflict(s)</span>
-                            </span>
-                          )}
-                          {documentAnalysis.execution_block?.witness_attestation_missing && (
-                            <span className="text-xs font-bold px-2.5 py-0.5 rounded bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A] flex items-center space-x-1">
-                              <AlertOctagon className="w-3.5 h-3.5 mr-1" />
-                              <span>Execution Block: Witness Attestation Missing</span>
+                              <span>{(documentAnalysis.conflicts || documentAnalysis.contradictions || []).length} Notice(s)</span>
                             </span>
                           )}
                         </div>
@@ -712,11 +703,11 @@ function AppContent() {
                     })()}
                   </div>
 
-                  <p className="text-xs md:text-sm text-[#1E1B17] font-medium leading-relaxed">
+                  <p className="text-xs md:text-sm text-[#1E1B17] font-medium leading-relaxed whitespace-pre-line">
                     {(readingLevel === 'very_simple'
                       ? documentAnalysis.summary_very_simple || documentAnalysis.summary_simple
                       : documentAnalysis.summary_simple || documentAnalysis.summary_very_simple) ||
-                      `${documentAnalysis.document_title || 'Legal Agreement'} analyzed with ${(documentAnalysis.clauses || []).length} primary clauses extracted.`}
+                      `${documentAnalysis.document_title || 'Government Scheme Circular'} analyzed with ${(documentAnalysis.clauses || []).length} circular sections extracted.`}
                   </p>
                 </div>
 

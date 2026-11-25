@@ -15,11 +15,9 @@ export const AnimatedMicButton: React.FC<AnimatedMicButtonProps> = ({
   isListening,
   onToggle,
   micState: externalState,
-  language = 'en',
+  language: _language = 'en',
   className = '',
 }) => {
-  const isHindi = language === 'hi' || language === 'hi-IN';
-
   // Determine current active state
   const currentState: MicState = externalState || (isListening ? 'listening' : 'muted');
 
@@ -29,50 +27,30 @@ export const AnimatedMicButton: React.FC<AnimatedMicButtonProps> = ({
   useEffect(() => {
     switch (currentState) {
       case 'listening':
-        setAnnouncement(
-          isHindi
-            ? 'माइक्रोफ़ोन सक्रिय, आपकी आवाज़ सुन रहे हैं'
-            : 'Microphone active, listening to your voice'
-        );
+        setAnnouncement('Microphone active, listening to your voice');
         break;
       case 'permission-denied':
-        setAnnouncement(
-          isHindi
-            ? 'माइक्रोफ़ोन अनुमति अस्वीकृत। कृपया ब्राउज़र सेटिंग्स जांचें'
-            : 'Microphone access blocked. Check browser permissions'
-        );
+        setAnnouncement('Microphone access blocked. Check browser permissions');
         break;
       case 'no-speech':
-        setAnnouncement(
-          isHindi
-            ? 'कोई आवाज़ नहीं पाई गई। कृपया पुनः प्रयास करें'
-            : 'No voice detected. Please try again'
-        );
+        setAnnouncement('No voice detected. Please try again');
         break;
       default:
-        setAnnouncement(isHindi ? 'माइक्रोफ़ोन बंद है' : 'Microphone muted');
+        setAnnouncement('Microphone muted');
         break;
     }
-  }, [currentState, isHindi]);
+  }, [currentState]);
 
   const getTooltip = (): string => {
     switch (currentState) {
       case 'listening':
-        return isHindi
-          ? 'माइक्रोफ़ोन चालू है — आवाज़ सुन रहे हैं...'
-          : 'Mic active — Listening to your voice...';
+        return 'Mic active — Listening to your voice...';
       case 'permission-denied':
-        return isHindi
-          ? 'माइक्रोफ़ोन एक्सेस अवरुद्ध है — ब्राउज़र सेटिंग्स जांचें'
-          : 'Microphone access blocked — check browser settings';
+        return 'Microphone access blocked — check browser settings';
       case 'no-speech':
-        return isHindi
-          ? 'कोई आवाज़ नहीं मिली — थोड़ा तेज़ बोलें'
-          : 'No voice detected — speak louder or try again';
+        return 'No voice detected — speak louder or try again';
       default:
-        return isHindi
-          ? 'बोले जाने वाले प्रश्न के लिए माइक्रोफ़ोन चालू करें'
-          : 'Click to speak your question';
+        return 'Click to speak your question';
     }
   };
 

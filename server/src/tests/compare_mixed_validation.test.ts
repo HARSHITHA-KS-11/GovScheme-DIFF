@@ -3,88 +3,65 @@ import { DocumentAnalysisResult } from '../../../src/types/schemas';
 
 async function runMixedDocumentValidationTests() {
   console.log('====================================================');
-  console.log('  MIXED LEGAL / NON-LEGAL DOCUMENT VALIDATION TESTS');
+  console.log('  MIXED CIRCULAR / NON-CIRCULAR VALIDATION TESTS');
   console.log('====================================================\n');
 
-  // Test 1: Guard 1 Rejects Non-Legal / Random Input (e.g. math equations, gibberish)
-  console.log('--- TEST 1: GUARD 1 CLASSIFICATION FOR NON-LEGAL TEXT ---');
-  const nonLegalText = "x^2 + y^2 = z^2. Solve for x when y = 3 and z = 5. Calculus assignment step 1.";
-  const g1Result = await runGuard1InputGateAsync(nonLegalText);
+  console.log('--- TEST 1: GUARD 1 REJECTS NON-CIRCULAR INPUT ---');
+  const nonCircularText = 'x^2 + y^2 = z^2. Solve for x when y = 3 and z = 5. Calculus assignment step 1.';
+  const g1Result = await runGuard1InputGateAsync(nonCircularText);
 
-  if (g1Result.is_legal_document) {
-    console.error('❌ [FAIL] Test 1: Guard 1 failed to reject non-legal text.');
+  if (g1Result.is_valid_circular) {
+    console.error('❌ [FAIL] Test 1: Guard 1 failed to reject non-circular text.');
     process.exit(1);
-  } else {
-    console.log(`✅ [PASS] Test 1: Non-legal text correctly rejected by Guard 1 (Reason: "${g1Result.rejection_reason}")`);
   }
+  console.log(`✅ [PASS] Test 1: Non-circular text rejected by Guard 1 (Reason: "${g1Result.rejection_reason}")`);
 
-  // Test 2: Document A Legal + Document B Non-Legal Format Helper Simulation
-  console.log('\n--- TEST 2: SLOT-ISOLATED ERROR FORMATTING (DOC B INVALID) ---');
-  const formatDocumentRejectReason = (rawError: string, docLabel: string, isHindi = false): string => {
+  console.log('\n--- TEST 2: SLOT-ISOLATED ERROR FORMATTING (CIRCULAR B INVALID) ---');
+  const formatDocumentRejectReason = (rawError: string, docLabel: string): string => {
     let cleanMsg = rawError
       .replace(/^Error:\s*/i, '')
       .replace(/^Document rejected by Guard 1:\s*/i, '')
       .trim();
 
     if (!cleanMsg || cleanMsg.toLowerCase().includes('analysis failed')) {
-      cleanMsg = isHindi
-        ? 'यह एक वैध कानूनी दस्तावेज़ नहीं लगता है। कृपया एक वैध कानूनी समझौता अपलोड करें या पेस्ट करें।'
-        : 'this does not appear to be a valid legal document. Please upload or paste a legal agreement.';
-    } else {
-      const lower = cleanMsg.toLowerCase();
-      if (!lower.includes('legal agreement') && !lower.includes('कानूनी')) {
-        cleanMsg = isHindi
-          ? `${cleanMsg} (कृपया एक वैध कानूनी समझौता अपलोड करें या पेस्ट करें।)`
-          : `${cleanMsg}. Please upload or paste a legal agreement.`;
-      }
+      cleanMsg = 'this does not appear to be a valid government circular or scheme guideline. Please upload or paste an official government circular.';
+    } else if (!cleanMsg.toLowerCase().includes('government circular') && !cleanMsg.toLowerCase().includes('scheme')) {
+      cleanMsg = `${cleanMsg}. Please upload or paste a valid government circular.`;
     }
 
-    const prefix = isHindi ? `${docLabel} की तुलना नहीं की जा सकी:` : `${docLabel} could not be compared:`;
-    if (!cleanMsg.toLowerCase().includes(docLabel.toLowerCase())) {
-      return `${prefix} ${cleanMsg}`;
-    }
-    return cleanMsg;
+    const prefix = `${docLabel} could not be compared:`;
+    return cleanMsg.toLowerCase().includes(docLabel.toLowerCase()) ? cleanMsg : `${prefix} ${cleanMsg}`;
   };
 
-  const errB = formatDocumentRejectReason(g1Result.rejection_reason || '', 'Document B');
-  if (!errB.startsWith('Document B could not be compared:')) {
-    console.error(`❌ [FAIL] Test 2: Formatted error "${errB}" does not explicitly identify Document B.`);
+  const errB = formatDocumentRejectReason(g1Result.rejection_reason || '', 'Circular B');
+  if (!errB.startsWith('Circular B could not be compared:')) {
+    console.error(`❌ [FAIL] Test 2: Formatted error "${errB}" does not identify Circular B.`);
     process.exit(1);
   }
-  console.log(`✅ [PASS] Test 2: Document B rejection message explicitly named slot: "${errB}"`);
+  console.log(`✅ [PASS] Test 2: Circular B rejection message named slot: "${errB}"`);
 
-  // Test 3: Document A Non-Legal + Document B Non-Legal (Both Invalid Combined Error)
-  console.log('\n--- TEST 3: COMBINED ERROR WHEN BOTH DOCUMENTS ARE INVALID ---');
-  const errA = formatDocumentRejectReason("Input text does not contain valid legal terms", 'Document A');
-  const combinedError = `Comparison Error — Both documents failed legal validation:\n• ${errA}\n• ${errB}`;
-
-  if (!combinedError.includes('Document A') || !combinedError.includes('Document B')) {
-    console.error(`❌ [FAIL] Test 3: Combined error does not explicitly name both Document A and Document B.`);
-    process.exit(1);
-  }
-  console.log(`✅ [PASS] Test 3: Combined error correctly names both slots:\n${combinedError}`);
-
-  // Test 4: Regression Check - Valid Document A & B Comparison Works
-  console.log('\n--- TEST 4: REGRESSION - VALID LEGAL DOCUMENT PAIR COMPARISON ---');
+  console.log('\n--- TEST 3: VALID CIRCULAR PAIR COMPARISON ---');
   const validDocA: DocumentAnalysisResult = {
-    guard1: { is_legal_document: true, category: 'rental/lease agreement', confidence: 0.98 },
-    document_title: 'Residential Tenancy Agreement A',
-    category: 'rental/lease agreement',
+    guard1: { is_valid_circular: true, document_kind: 'scheme_circular', category: 'housing & infrastructure', confidence: 0.98 },
+    document_title: 'Rural Housing Circular 2025',
+    category: 'housing & infrastructure',
     overall_risk_score: 25,
-    summary_simple: 'Lease contract A summary',
-    summary_very_simple: 'Lease A summary',
+    summary_simple: '1. Circular A overview.\n2. Covers grant rules.\n3. Page 1.',
+    summary_very_simple: '1. Circular A.\n2. Grant rules.\n3. Page 1.',
     clauses: [
       {
         id: 'c1',
         clause_number: '1',
-        title: 'Rent',
-        clause_type: 'rent & payment',
-        original_text: 'Rent is $2,000 per month.',
-        simple_explanation: 'Monthly rent is $2,000.',
-        very_simple_explanation: 'Rent $2,000/mo.',
+        page_number: 1,
+        section_reference: 'Section 1',
+        title: 'Grant Amount',
+        clause_type: 'benefits & financial assistance',
+        original_text: 'Eligible families receive Rs. 1,20,000 grant.',
+        simple_explanation: '1. Eligible families get Rs. 1,20,000.\n2. Paid via bank transfer.\n3. Page 1, Section 1.',
+        very_simple_explanation: '1. Get Rs. 1,20,000.\n2. Bank transfer.\n3. Page 1, Section 1.',
         risk_level: 'low',
-        icon_name: 'ShieldCheck',
-        one_line_consequence: 'Standard rent obligation.',
+        icon_name: 'CheckCircle',
+        one_line_consequence: 'Standard Info: Financial assistance amount.',
       },
     ],
     contradictions: [],
@@ -102,24 +79,26 @@ async function runMixedDocumentValidationTests() {
   };
 
   const validDocB: DocumentAnalysisResult = {
-    guard1: { is_legal_document: true, category: 'rental/lease agreement', confidence: 0.98 },
-    document_title: 'Residential Tenancy Agreement B',
-    category: 'rental/lease agreement',
-    overall_risk_score: 40,
-    summary_simple: 'Lease contract B summary',
-    summary_very_simple: 'Lease B summary',
+    guard1: { is_valid_circular: true, document_kind: 'amendment', category: 'housing & infrastructure', confidence: 0.98 },
+    document_title: 'Rural Housing Circular 2026',
+    category: 'housing & infrastructure',
+    overall_risk_score: 30,
+    summary_simple: '1. Circular B overview.\n2. Updated grant rules.\n3. Page 1.',
+    summary_very_simple: '1. Circular B.\n2. Updated grant.\n3. Page 1.',
     clauses: [
       {
         id: 'c1',
         clause_number: '1',
-        title: 'Rent',
-        clause_type: 'rent & payment',
-        original_text: 'Rent is $2,500 per month.',
-        simple_explanation: 'Monthly rent is $2,500.',
-        very_simple_explanation: 'Rent $2,500/mo.',
+        page_number: 1,
+        section_reference: 'Section 1',
+        title: 'Grant Amount',
+        clause_type: 'benefits & financial assistance',
+        original_text: 'Eligible families receive Rs. 1,50,000 grant.',
+        simple_explanation: '1. Eligible families get Rs. 1,50,000.\n2. Paid via bank transfer.\n3. Page 1, Section 1.',
+        very_simple_explanation: '1. Get Rs. 1,50,000.\n2. Bank transfer.\n3. Page 1, Section 1.',
         risk_level: 'watch_out',
-        icon_name: 'ShieldAlert',
-        one_line_consequence: 'Higher rent obligation.',
+        icon_name: 'Clock',
+        one_line_consequence: 'Check Carefully: Updated financial grant amount.',
       },
     ],
     contradictions: [],
@@ -137,18 +116,12 @@ async function runMixedDocumentValidationTests() {
   };
 
   const compRes = await compareTwoDocuments(validDocA, validDocB);
-  if (!compRes || !compRes.aligned_pairs || compRes.aligned_pairs.length === 0) {
-    console.error('❌ [FAIL] Test 4: Comparison failed for valid legal document pair.');
+  if (!compRes || !compRes.aligned_pairs || compRes.aligned_pairs.length === 0 || compRes.modified_count !== 1) {
+    console.error('❌ [FAIL] Test 3: Valid circular pair comparison did not return modified_count=1.');
     process.exit(1);
   }
-  console.log(`✅ [PASS] Test 4: Valid legal document pair comparison executed normally (${compRes.aligned_pairs.length} aligned clause pairs)`);
-
-  console.log('\n====================================================');
-  console.log('  SUMMARY: ALL MIXED DOCUMENT VALIDATION TESTS PASSED 🟢');
-  console.log('====================================================');
+  console.log('✅ [PASS] Test 3: Valid government circular pair comparison detected grant increase accurately.');
+  console.log('\n🟢 ALL MIXED VALIDATION TESTS PASSED!');
 }
 
-runMixedDocumentValidationTests().catch((err) => {
-  console.error('Fatal error in mixed document validation test runner:', err);
-  process.exit(1);
-});
+runMixedDocumentValidationTests();

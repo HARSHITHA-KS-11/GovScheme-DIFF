@@ -5,14 +5,174 @@ import { PDFDocument } from 'pdf-lib';
 import { PDFParse } from 'pdf-parse';
 import { MAX_PDF_PAGES, MAX_PDF_PAGES_ERROR_MSG } from '../config/constants';
 
-// Safe pdf-parse loader helper compatible with PDFParse class and legacy function
+function detectImageMimeFromMagicBytes(buffer: Buffer, fallbackMime: string = 'image/png'): string {
+  if (buffer && Buffer.isBuffer(buffer) && buffer.length >= 4) {
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png';
+    if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return 'image/gif';
+    if (buffer[0] === 0x42 && buffer[1] === 0x4d) return 'image/bmp';
+    if (buffer.length >= 12 && buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) return 'image/webp';
+  }
+  return fallbackMime && fallbackMime.startsWith('image/') ? fallbackMime : 'image/png';
+}
+
+function hasImageMagicBytes(fileBuffer: Buffer): boolean {
+  return Boolean(
+    fileBuffer &&
+    Buffer.isBuffer(fileBuffer) &&
+    fileBuffer.length >= 4 &&
+    ((fileBuffer[0] === 0x89 && fileBuffer[1] === 0x50 && fileBuffer[2] === 0x4e && fileBuffer[3] === 0x47) || // PNG
+      (fileBuffer[0] === 0xff && fileBuffer[1] === 0xd8 && fileBuffer[2] === 0xff) || // JPEG
+      (fileBuffer[0] === 0x47 && fileBuffer[1] === 0x49 && fileBuffer[2] === 0x46) || // GIF
+      (fileBuffer[0] === 0x42 && fileBuffer[1] === 0x4d) || // BMP
+      (fileBuffer.length >= 12 && fileBuffer[8] === 0x57 && fileBuffer[9] === 0x45 && fileBuffer[10] === 0x42 && fileBuffer[11] === 0x50)) // WEBP
+  );
+}
+
+function isLikelyReadableImageBuffer(fileBuffer: Buffer): boolean {
+  if (!hasImageMagicBytes(fileBuffer) || fileBuffer.length < 64) {
+    return false;
+  }
+  const isPng = fileBuffer[0] === 0x89 && fileBuffer[1] === 0x50 && fileBuffer[2] === 0x4e && fileBuffer[3] === 0x47;
+  if (isPng && !fileBuffer.includes(Buffer.from('IEND'))) {
+    return false;
+  }
+  return true;
+}
+
+async function performLocalTesseractOcrBatch(imageBuffers: Buffer[]): Promise<string[]> {
+  const validBuffers = imageBuffers.filter((b) => isLikelyReadableImageBuffer(b));
+  if (validBuffers.length === 0) return imageBuffers.map(() => '');
+
+  const results: string[] = new Array(imageBuffers.length).fill('');
+  try {
+    const { createWorker } = await import('tesseract.js');
+    console.log(`👁️ [LOCAL TESSERACT OCR] Starting batch OCR for ${validBuffers.length} page/image buffer(s)...`);
+    let rejectActiveRecognize: ((err: any) => void) | null = null;
+    const worker = await createWorker('eng', 1, {
+      errorHandler: (err: any) => {
+        console.warn('Local Tesseract worker error caught safely:', err?.message || err);
+        if (rejectActiveRecognize) {
+          rejectActiveRecognize(err);
+          rejectActiveRecognize = null;
+        }
+      },
+    });
+    try {
+      for (let i = 0; i < imageBuffers.length; i++) {
+        const buf = imageBuffers[i];
+        if (!isLikelyReadableImageBuffer(buf)) continue;
+        try {
+          const ret: any = await Promise.race([
+            worker.recognize(buf),
+            new Promise((_, reject) => {
+              rejectActiveRecognize = reject;
+            }),
+          ]);
+          rejectActiveRecognize = null;
+          const tesseractText = (ret?.data?.text || '').trim();
+          if (tesseractText.length > 10) {
+            results[i] = tesseractText;
+          }
+        } catch (pageErr) {
+          rejectActiveRecognize = null;
+          console.warn(`Local Tesseract OCR page ${i + 1} warning:`, (pageErr as any)?.message || pageErr);
+        }
+      }
+    } finally {
+      await worker.terminate().catch(() => {});
+    }
+  } catch (err) {
+    console.warn('Local Tesseract OCR worker initialization warning:', (err as any)?.message || err);
+  }
+  return results;
+}
+
+// Per-page PDF extraction with automatic scanned-page rendering + OCR fallback
 async function extractPdfTextWithPdfParseAsync(fileBuffer: Buffer): Promise<string> {
   try {
     if (typeof PDFParse === 'function') {
       const parser = new PDFParse(new Uint8Array(fileBuffer));
-      const res = await parser.getText();
-      if (res && typeof res.text === 'string' && res.text.trim().length > 0) {
-        return res.text.trim();
+      try {
+        const res = await parser.getText();
+        const pages = Array.isArray(res?.pages) ? res.pages : [];
+        const totalPages = pages.length || res?.total || 0;
+
+        const pageTextMap = new Map<number, string>();
+        const pagesNeedingOcr: number[] = [];
+
+        if (pages.length > 0) {
+          for (const page of pages) {
+            const pageNum = typeof page.num === 'number' ? page.num : pageTextMap.size + 1;
+            const cleanedPage = (page.text || '')
+              .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '')
+              .replace(/\s+\n/g, '\n')
+              .trim();
+
+            if (cleanedPage.length >= 20 && isReadableProse(cleanedPage) && !containsPdfObjectNoise(cleanedPage)) {
+              pageTextMap.set(pageNum, cleanedPage);
+            } else {
+              pagesNeedingOcr.push(pageNum);
+            }
+          }
+        } else if (res && typeof res.text === 'string' && res.text.trim().length > 0) {
+          const cleaned = res.text.replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '').trim();
+          if (cleaned.length >= 20 && isReadableProse(cleaned) && !containsPdfObjectNoise(cleaned)) {
+            return `--- Page 1 ---\n${cleaned}`;
+          }
+        }
+
+        // Render and OCR any scanned / image-only pages
+        if (pagesNeedingOcr.length > 0 && pagesNeedingOcr.length <= MAX_PDF_PAGES) {
+          console.log(`👁️ [SCANNED PDF OCR] Page(s) ${pagesNeedingOcr.join(', ')} lack selectable text. Rendering to PNG for OCR...`);
+          try {
+            const screenshotResult = await parser.getScreenshot({
+              partial: pagesNeedingOcr,
+              scale: 2,
+              imageBuffer: true,
+              imageDataUrl: false,
+            });
+            const renderedPages = Array.isArray(screenshotResult?.pages) ? screenshotResult.pages : [];
+            const missingAfterVision: Array<{ pageNum: number; pngBuf: Buffer }> = [];
+
+            for (const shot of renderedPages) {
+              const pngBuf = Buffer.from(shot.data);
+              // Try remote Vision OCR first if an API key is configured; otherwise batch with Tesseract below
+              const visionPageText = await performVisionOcrOnImageBuffer(pngBuf, 'image/png', false);
+              if (visionPageText && visionPageText.trim().length > 15 && isReadableProse(visionPageText)) {
+                pageTextMap.set(shot.pageNumber, visionPageText.trim());
+              } else {
+                missingAfterVision.push({ pageNum: shot.pageNumber, pngBuf });
+              }
+            }
+
+            if (missingAfterVision.length > 0) {
+              const ocrTexts = await performLocalTesseractOcrBatch(missingAfterVision.map((m) => m.pngBuf));
+              for (let i = 0; i < missingAfterVision.length; i++) {
+                const text = (ocrTexts[i] || '').trim();
+                if (text.length > 15 && isReadableProse(text)) {
+                  pageTextMap.set(missingAfterVision[i].pageNum, text);
+                }
+              }
+            }
+          } catch (ocrRenderErr) {
+            console.warn('PDF page screenshot rendering for OCR failed:', ocrRenderErr);
+          }
+        }
+
+        const orderedPageNums = Array.from(pageTextMap.keys()).sort((a, b) => a - b);
+        if (orderedPageNums.length > 0) {
+          return orderedPageNums
+            .map((pNum) => `--- Page ${pNum} ---\n${pageTextMap.get(pNum)}`)
+            .join('\n\n')
+            .trim();
+        }
+
+        if (totalPages === 0 && res && typeof res.text === 'string' && res.text.trim().length > 0) {
+          return `--- Page 1 ---\n${res.text.trim()}`;
+        }
+      } finally {
+        await parser.destroy().catch(() => {});
       }
     }
   } catch (e) {
@@ -27,7 +187,7 @@ async function extractPdfTextWithPdfParseAsync(fileBuffer: Buffer): Promise<stri
       if (typeof fn === 'function') {
         const res = await fn(fileBuffer);
         if (res && typeof res.text === 'string' && res.text.trim().length > 0) {
-          return res.text.trim();
+          return `--- Page 1 ---\n${res.text.trim()}`;
         }
       }
     }
@@ -49,19 +209,21 @@ import {
   ChatMessage,
   ServerConfigStatus,
   Guard1InputGate,
+  CircularDocumentKind,
   DOCUMENT_CATEGORY_ENUM,
   CLAUSE_TYPE_ENUM,
   ClauseType,
   RiskLevel,
   normalizeClauseType,
+  normalizeDocumentCategory,
   normalizeRiskLevel,
   DocumentCategory,
   SimplifiedClause,
   QuotaTelemetry,
   InternalContradiction,
   ExecutionBlockAnalysis,
+  NextStepsOption,
 } from '../../../src/types/schemas';
-import { SAMPLE_RENTAL_AGREEMENT, SAMPLE_EMPLOYMENT_CONTRACT } from '../data/sampleDocuments';
 import { alignClauses } from '../../../src/utils/clauseAlignment';
 
 // Server-side in-memory API key store
@@ -250,14 +412,11 @@ export function isReadableProse(text: string): boolean {
     'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she',
     'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what',
     'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me',
-    'agreement', 'contract', 'party', 'borrower', 'lender', 'tenant', 'landlord',
-    'employer', 'employee', 'loan', 'rent', 'amount', 'shall', 'pay', 'date',
-    'written', 'signed', 'witness', 'term', 'section', 'clause', 'notice', 'rs',
-    'rupees', 'interest', 'rate', 'payment', 'penalty', 'law', 'jurisdiction',
-    'रोजगार', 'प्रस्ताव', 'पत्र', 'वेतन', 'परिवीक्षा', 'काल', 'नोटिस', 'अवधि', 'बॉन्ड', 'कार्य',
-    'घंटे', 'कर्मचारी', 'सेवा', 'माह', 'भुगतान', 'स्वीकृति', 'पुष्टि', 'हस्ताक्षर', 'भवदीय', 'रुपये',
-    'अनुबंध', 'करार', 'किराया', 'जमानत', 'शर्तें', 'कानून', 'अदालत', 'न्यायालय', 'धारा', 'अधिनियम',
-    'पक्ष', 'प्रथम', 'द्वितीय', 'सहमति', 'विवरण', 'ऋण', 'ब्याज'
+    'government', 'circular', 'scheme', 'yojana', 'notification', 'order', 'ministry',
+    'department', 'guidelines', 'eligibility', 'eligible', 'beneficiary', 'beneficiaries',
+    'subsidy', 'grant', 'scholarship', 'pension', 'assistance', 'applicant', 'income',
+    'limit', 'deadline', 'documents', 'amendment', 'corrigendum', 'portal', 'rs', 'rupees',
+    'date', 'clause', 'section', 'notice', 'para', 'issued', 'effective', 'benefit'
   ]);
 
   const isIndianLanguageToken = (t: string) => /[\u0900-\u097F\u0C80-\u0CFF]/u.test(t);
@@ -365,125 +524,124 @@ function extractPdfTextWithZlib(fileBuffer: Buffer): string {
   return result;
 }
 
-async function performVisionOcrOnImageBuffer(fileBuffer: Buffer, mimeType: string = 'image/png'): Promise<string | null> {
+async function performVisionOcrOnImageBuffer(
+  fileBuffer: Buffer,
+  mimeType: string = 'image/png',
+  allowLocalTesseractFallback: boolean = true
+): Promise<string | null> {
+  const isPdfInput =
+    mimeType.toLowerCase().includes('pdf') ||
+    (fileBuffer && Buffer.isBuffer(fileBuffer) && fileBuffer.length >= 4 && fileBuffer[0] === 0x25 && fileBuffer[1] === 0x50 && fileBuffer[2] === 0x44 && fileBuffer[3] === 0x46);
+
+  const effectiveMime = isPdfInput
+    ? 'application/pdf'
+    : detectImageMimeFromMagicBytes(fileBuffer, mimeType);
+
   try {
     const groqEnvKey = (process.env.GROQ_API_KEY || '').replace(/^['"]|['"]$/g, '').trim();
     const backupGroqKey = (process.env.GROQ_API_KEY_BACKUP || '').replace(/^['"]|['"]$/g, '').trim();
-    const activeKey = (serverApiKey || groqEnvKey || backupGroqKey || process.env.ASTRA_API_KEY || process.env.GEMINI_API_KEY || '').replace(/^['"]|['"]$/g, '').trim();
-    if (!activeKey || activeKey.length < 5) return null;
+    const geminiEnvKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').replace(/^['"]|['"]$/g, '').trim();
+    const openAiEnvKey = (process.env.OPENAI_API_KEY || '').replace(/^['"]|['"]$/g, '').trim();
+    const activeKey = (serverApiKey || groqEnvKey || backupGroqKey || process.env.ASTRA_API_KEY || geminiEnvKey || openAiEnvKey || '').replace(/^['"]|['"]$/g, '').trim();
 
-    const base64Data = fileBuffer.toString('base64');
-    const effectiveMime = mimeType && mimeType.startsWith('image/') ? mimeType : 'image/png';
+    if (activeKey && activeKey.length >= 5) {
+      const base64Data = fileBuffer.toString('base64');
+      const ocrPrompt =
+        'Extract all visible text verbatim from this government circular or document, preserving headings, section numbers, tables, dates, amounts, and page numbers. Return only the extracted text.';
 
-    // Try Gemini Native Vision API first if Gemini key present
-    if (activeKey.startsWith('AIza') || activeKey.startsWith('AQ.')) {
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`;
-      const res = await fetch(geminiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: "Extract all visible text from this document image verbatim, preserving Kannada and English text, numbers, clause titles, headers, and signatures. Return only the extracted document text." },
-              { inline_data: { mime_type: effectiveMime, data: base64Data } }
-            ]
-          }]
-        }),
-        signal: AbortSignal.timeout(20000),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text && text.trim().length > 20) {
-          console.log(`👁️ [VISION OCR SUCCESS] Extracted ${text.length} chars from image via Gemini Vision API.`);
-          return text.trim();
-        }
-      }
-    }
-
-    // Try OpenAI / Groq Vision Chat Completions API
-    const dataUrl = `data:${effectiveMime};base64,${base64Data}`;
-    const messages = [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: 'Extract all visible text from this document image verbatim, preserving Kannada and English text. Return only the extracted text.' },
-          { type: 'image_url', image_url: { url: dataUrl } }
-        ]
-      }
-    ];
-
-    const visionModels = [
-      'llama-3.2-11b-vision-instruct',
-      'llama-3.2-90b-vision-instruct',
-      'gpt-4o-mini',
-      'gemini-2.5-flash'
-    ];
-    for (const model of visionModels) {
-      try {
-        const endpoint = activeKey.startsWith('gsk_') ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
-        const res = await fetch(endpoint, {
+      // 1. Gemini Native API supports both image/* and application/pdf inline_data
+      const geminiKey = geminiEnvKey || (activeKey.startsWith('AIza') || activeKey.startsWith('AQ.') ? activeKey : '');
+      if (geminiKey) {
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
+        const res = await fetch(geminiUrl, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${activeKey}`
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model,
-            messages,
-            max_tokens: 2000
+            contents: [{
+              parts: [
+                { text: ocrPrompt },
+                { inline_data: { mime_type: effectiveMime, data: base64Data } }
+              ]
+            }]
           }),
-          signal: AbortSignal.timeout(15000)
+          signal: AbortSignal.timeout(20000),
         });
 
         if (res.ok) {
           const data = await res.json();
-          const text = data.choices?.[0]?.message?.content;
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
           if (text && text.trim().length > 20) {
-            console.log(`👁️ [VISION OCR SUCCESS] Extracted ${text.length} chars from image via ${model}.`);
+            console.log(`👁️ [VISION OCR SUCCESS] Extracted ${text.length} chars (${effectiveMime}) via Gemini Vision API.`);
             return text.trim();
           }
         }
-      } catch {
-        // Continue to next model candidate
+      }
+
+      // 2. OpenAI / Groq Vision Chat Completions ONLY accept image/* data URLs (never raw application/pdf)
+      if (!isPdfInput && effectiveMime.startsWith('image/')) {
+        const dataUrl = `data:${effectiveMime};base64,${base64Data}`;
+        const messages = [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: ocrPrompt },
+              { type: 'image_url', image_url: { url: dataUrl } }
+            ]
+          }
+        ];
+
+        const visionTargets: Array<{ endpoint: string; model: string; key: string }> = [];
+        const groqKey = groqEnvKey || backupGroqKey || (activeKey.startsWith('gsk_') ? activeKey : '');
+        if (groqKey.startsWith('gsk_')) {
+          visionTargets.push(
+            { endpoint: 'https://api.groq.com/openai/v1/chat/completions', model: 'meta-llama/llama-4-scout-17b-16e-instruct', key: groqKey },
+            { endpoint: 'https://api.groq.com/openai/v1/chat/completions', model: 'meta-llama/llama-4-maverick-17b-128e-instruct', key: groqKey }
+          );
+        }
+        if (openAiEnvKey.length > 5) {
+          visionTargets.push({ endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini', key: openAiEnvKey });
+        }
+
+        for (const target of visionTargets) {
+          try {
+            const res = await fetch(target.endpoint, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${target.key}`
+              },
+              body: JSON.stringify({
+                model: target.model,
+                messages,
+                max_tokens: 2000
+              }),
+              signal: AbortSignal.timeout(15000)
+            });
+
+            if (res.ok) {
+              const data = await res.json();
+              const text = data.choices?.[0]?.message?.content;
+              if (text && text.trim().length > 20) {
+                console.log(`👁️ [VISION OCR SUCCESS] Extracted ${text.length} chars from ${effectiveMime} via ${target.model}.`);
+                return text.trim();
+              }
+            }
+          } catch {
+            // Continue to next model candidate
+          }
+        }
       }
     }
   } catch (err) {
     console.warn('Vision OCR processing fallback:', err);
   }
 
-  // Fallback to local Tesseract OCR if remote Vision API models are unavailable or unconfigured
-  const hasValidMagicBytes =
-    fileBuffer &&
-    Buffer.isBuffer(fileBuffer) &&
-    fileBuffer.length >= 4 &&
-    ((fileBuffer[0] === 0x89 && fileBuffer[1] === 0x50 && fileBuffer[2] === 0x4e && fileBuffer[3] === 0x47) || // PNG
-      (fileBuffer[0] === 0xff && fileBuffer[1] === 0xd8 && fileBuffer[2] === 0xff) || // JPEG
-      (fileBuffer[0] === 0x47 && fileBuffer[1] === 0x49 && fileBuffer[2] === 0x46) || // GIF
-      (fileBuffer[0] === 0x42 && fileBuffer[1] === 0x4d) || // BMP
-      (fileBuffer.length >= 12 && fileBuffer[8] === 0x57 && fileBuffer[9] === 0x45 && fileBuffer[10] === 0x42 && fileBuffer[11] === 0x50)); // WEBP
-
-  if (hasValidMagicBytes) {
-    try {
-      const { createWorker } = await import('tesseract.js');
-      console.log(`👁️ [LOCAL TESSERACT OCR ATTEMPT] Ingesting image buffer (${fileBuffer.length} bytes) with Tesseract engine...`);
-      const worker = await createWorker('eng');
-      try {
-        const ret = await worker.recognize(fileBuffer);
-        await worker.terminate();
-
-        const tesseractText = ret?.data?.text || '';
-        if (tesseractText.trim().length > 15) {
-          console.log(`👁️ [LOCAL TESSERACT OCR SUCCESS] Extracted ${tesseractText.length} characters from image.`);
-          return tesseractText.trim();
-        }
-      } catch (ocrErr) {
-        await worker.terminate().catch(() => { });
-        console.warn('Local Tesseract OCR recognition warning:', (ocrErr as any)?.message || ocrErr);
-      }
-    } catch (err) {
-      console.warn('Local Tesseract OCR processing warning:', (err as any)?.message || err);
+  // 3. Fallback to local Tesseract OCR for valid image buffers
+  if (allowLocalTesseractFallback && !isPdfInput && hasImageMagicBytes(fileBuffer)) {
+    const batch = await performLocalTesseractOcrBatch([fileBuffer]);
+    if (batch[0] && batch[0].trim().length > 15) {
+      console.log(`👁️ [LOCAL TESSERACT OCR SUCCESS] Extracted ${batch[0].length} characters from ${effectiveMime}.`);
+      return batch[0].trim();
     }
   }
 
@@ -715,10 +873,13 @@ export async function extractAndCleanDocumentTextAsync(
         throw new Error(MAX_PDF_PAGES_ERROR_MSG);
       }
 
-      // 2. Primary PDF parser using pdf-parse library
+      // 2. Primary PDF parser using pdf-parse (per-page text + scanned-page screenshot OCR)
       try {
         const candidate = await extractPdfTextWithPdfParseAsync(fileBuffer);
-        const cleanCandidate = (candidate || '').replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '').trim();
+        const cleanCandidate = (candidate || '')
+          .replace(/---\s*Page\s+\d+\s*---/gi, '')
+          .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '')
+          .trim();
         if (cleanCandidate && cleanCandidate.length > 10 && isReadableProse(cleanCandidate) && !containsPdfObjectNoise(cleanCandidate)) {
           extractedText = candidate;
         }
@@ -730,17 +891,17 @@ export async function extractAndCleanDocumentTextAsync(
       if (!extractedText || extractedText.length < 10) {
         const candidate = extractPdfTextWithZlib(fileBuffer);
         if (candidate && isReadableProse(candidate) && !containsPdfObjectNoise(candidate)) {
-          extractedText = candidate;
+          extractedText = /---\s*Page\s+\d+\s*---/i.test(candidate) ? candidate : `--- Page 1 ---\n${candidate}`;
         }
       }
 
-      // 4. Fallback AI Vision OCR for complex compressed / ASCII85 or scanned image PDF
+      // 4. Fallback Gemini Native PDF OCR if PDFParse & zlib both failed (application/pdf MIME preserved)
       if (!extractedText || extractedText.length < 10) {
-        console.log(`👁️ [PDF VISION OCR ATTEMPT] Dispatching PDF buffer (${fileBuffer.length} bytes) to Vision API...`);
-        const visionText = await performVisionOcrOnImageBuffer(fileBuffer, 'application/pdf');
+        console.log(`👁️ [PDF VISION OCR ATTEMPT] Dispatching PDF buffer (${fileBuffer.length} bytes) with application/pdf MIME...`);
+        const visionText = await performVisionOcrOnImageBuffer(fileBuffer, 'application/pdf', false);
         if (visionText && visionText.trim().length > 20 && isReadableProse(visionText) && !containsPdfObjectNoise(visionText)) {
-          console.log(`👁️ [PDF VISION OCR SUCCESS] Extracted ${visionText.length} characters via Vision API.`);
-          extractedText = visionText.trim();
+          console.log(`👁️ [PDF VISION OCR SUCCESS] Extracted ${visionText.length} characters via Gemini PDF API.`);
+          extractedText = /---\s*Page\s+\d+\s*---/i.test(visionText) ? visionText.trim() : `--- Page 1 ---\n${visionText.trim()}`;
         }
       }
 
@@ -753,15 +914,16 @@ export async function extractAndCleanDocumentTextAsync(
       extractedText = extractDocxText(fileBuffer);
     } else if (isImage) {
       const rawStr = fileBuffer.toString('utf-8');
+      const trueImageMime = detectImageMimeFromMagicBytes(fileBuffer, mimeType);
 
-      // 1. Try real AI Vision OCR first to extract text from document image
-      console.log(`👁️ [VISION OCR ATTEMPT] Dispatching image buffer (${fileBuffer.length} bytes) to Vision API...`);
-      const visionText = await performVisionOcrOnImageBuffer(fileBuffer, mimeType);
+      // 1. Try real AI Vision OCR / local Tesseract OCR first to extract text from document image
+      console.log(`👁️ [VISION OCR ATTEMPT] Dispatching image buffer (${fileBuffer.length} bytes, ${trueImageMime}) to OCR pipeline...`);
+      const visionText = await performVisionOcrOnImageBuffer(fileBuffer, trueImageMime, true);
       if (visionText && visionText.trim().length > 20 && isReadableProse(visionText)) {
         console.log(`👁️ [VISION OCR SUCCESS] Extracted ${visionText.length} characters of clear text.`);
         extractedText = visionText.trim();
       } else {
-        // 2. Local text extraction fallback (for text buffers / embedded OCR streams)
+        // 2. Local text extraction fallback (for text buffers / embedded text fixtures)
         const cleanText = rawStr.replace(/[^\p{L}\p{N}\p{P}\p{Z}\n]/gu, ' ').replace(/\s+/g, ' ').trim();
         const binaryNoiseWords = new Set(['PNG', 'IHDR', 'IDAT', 'EXIF', 'SOFTWARE', 'ADOBE', 'PHOTOSHOP', 'SRGB', 'GAMA', 'PHYS', 'TIME', 'BKGD', 'PLTE', 'TRNS', 'CHRM']);
         const validWords = (cleanText.match(/[\p{L}\p{N}]{3,}/gu) || []).filter(
@@ -771,12 +933,17 @@ export async function extractAndCleanDocumentTextAsync(
         if (validWords.length >= 8 && isReadableProse(validWords.join(' '))) {
           extractedText = validWords.join(' ').slice(0, 3000);
         } else {
-          console.warn(`⚠️ [VISION OCR REJECTION] AI Vision found no legal document text in image "${originalName}". Flagging non-legal media.`);
+          console.warn(`⚠️ [OCR REJECTION] No readable circular text found in image "${originalName}". Flagging non-document media.`);
           extractedText = `unrelated photograph scenic photo random photo image scan containing no text`;
         }
       }
 
-      if (extractedText.includes('DEGRADED OCR SCAN') || extractedText.includes('UNREADABLE BLURRY PHOTO TEXT') || extractedText.includes('LOW_CONFIDENCE_OCR_ERR') || rawStr.includes('degraded') || rawStr.includes('blurry')) {
+      if (
+        extractedText.includes('DEGRADED OCR SCAN') ||
+        extractedText.includes('UNREADABLE BLURRY PHOTO TEXT') ||
+        extractedText.includes('LOW_CONFIDENCE_OCR_ERR') ||
+        (!hasImageMagicBytes(fileBuffer) && (rawStr.includes('degraded') || rawStr.includes('blurry')))
+      ) {
         throw new Error("Couldn't read this clearly — try a clearer photo");
       }
     }
@@ -1148,7 +1315,7 @@ async function callAiChatCompletion(messages: any[], jsonMode: boolean = false, 
   return null;
 }
 
-// Guard 1: AI Input Gate Classifier & Substantive Legal Reasoning
+// Guard 1: AI Input Gate Classifier for Government Scheme Circulars & Policy Documents
 export async function runGuard1InputGateAsync(text: string, cancelSignal?: AbortSignal): Promise<Guard1InputGate> {
   const syncGate = runGuard1InputGate(text);
 
@@ -1168,16 +1335,26 @@ export async function runGuard1InputGateAsync(text: string, cancelSignal?: Abort
       const messages = [
         {
           role: 'system',
-          content: `You are Guard 1, an expert AI legal document classifier for LegalLens.
-Analyze the provided text and classify whether it is genuinely a valid legal document (e.g., contract, agreement, employment offer, NDA, loan note, deed, affidavit, lease).
+          content: `You are Guard 1, an expert government policy classifier for GovScheme Diff.
+Analyze the provided text and classify whether it is genuinely an official government circular or public scheme policy document.
 
 Classification Rules & Strict Gatekeeping Guidelines:
-1. Genuine Legal Documents: Contracts, rental/lease agreements, employment offers/contracts, NDAs, loan agreements, deeds, affidavits, MOUs. They establish binding legal rights, duties, liabilities, or obligations between identified contracting parties. Set "is_legal_document": true.
-2. Non-Legal Documents / Structured Non-Legal Text: Technical documentation, engineering changelogs/notes, software specs, developer walkthroughs, bug reports, code refactoring docs, architecture designs, resumes/CVs, articles, news, exam papers, recipes, casual messages. Even if technical or non-legal text contains legal terms like "clause", "agreement", "terms", "contract", or "risk", if it is NOT a binding legal agreement/contract itself, YOU MUST hard-reject it. Set "is_legal_document": false.
+1. Valid Government Documents (Set "is_valid_circular": true):
+   - Government Orders (G.O., Office Memorandum / O.M., Proceedings)
+   - Government Scheme Circulars (Central or State welfare/subsidy/scholarship/farmer/health/housing/employment/MSME circulars)
+   - Official Notifications (Gazette notifications, public scheme notices, statutory scheme announcements)
+   - Policy Amendments (Corrigenda, Addenda, Partial Modifications, Supersession orders updating scheme rules, income limits, age limits, benefits, documents, or deadlines)
+   - Scheme Guidelines (Operational guidelines, implementation guidelines, SOPs for public benefit schemes)
+2. Unrelated Documents to Hard-Reject (Set "is_valid_circular": false):
+   - Private legal contracts or agreements (residential leases/rental agreements, private employment offer letters, NDAs, personal loans, sale deeds, vendor agreements)
+   - News articles, editorials, blog posts, press journalism
+   - Technical documentation, engineering changelogs, source code, resumes/CVs
+   - Exam papers, recipes, shopping lists, casual messages, or empty/unreadable scans.
 
 Respond strictly in JSON with keys:
-"is_legal_document": boolean,
-"category": string (one of: "rental/lease agreement", "employment contract", "NDA", "loan agreement/promissory note", "sale agreement/deed", "other"),
+"is_valid_circular": boolean,
+"document_kind": one of ["government_order", "scheme_circular", "notification", "amendment", "scheme_guidelines", "other"],
+"category": one of ${JSON.stringify(DOCUMENT_CATEGORY_ENUM)},
 "confidence": number (between 0.0 and 1.0),
 "rejection_reason": string or null.`
         },
@@ -1192,24 +1369,40 @@ Respond strictly in JSON with keys:
         const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
-          if (typeof parsed.is_legal_document === 'boolean') {
+          const aiValid = typeof parsed.is_valid_circular === 'boolean' ? parsed.is_valid_circular : undefined;
+          if (typeof aiValid === 'boolean') {
             const isNegativeRuleMatch =
-              !syncGate.is_legal_document &&
-              syncGate.rejection_reason &&
-              !syncGate.rejection_reason.includes('lacks essential legal document structure');
+              !syncGate.is_valid_circular &&
+              Boolean(syncGate.rejection_reason) &&
+              !syncGate.rejection_reason!.includes('lacks essential government circular');
 
-            let finalIsLegal = false;
+            let finalIsValid = false;
             if (isNegativeRuleMatch) {
-              finalIsLegal = false;
+              finalIsValid = false;
             } else {
-              finalIsLegal = syncGate.is_legal_document || parsed.is_legal_document;
+              finalIsValid = syncGate.is_valid_circular || aiValid;
             }
 
+            const validKinds: CircularDocumentKind[] = [
+              'government_order',
+              'scheme_circular',
+              'notification',
+              'amendment',
+              'scheme_guidelines',
+              'other',
+            ];
+            const parsedKind: CircularDocumentKind = validKinds.includes(parsed.document_kind)
+              ? parsed.document_kind
+              : (syncGate.document_kind || 'other');
+
             return {
-              is_legal_document: finalIsLegal,
-              category: parsed.category || syncGate.category,
-              confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.95,
-              rejection_reason: finalIsLegal ? undefined : (parsed.rejection_reason || syncGate.rejection_reason || 'Document rejected by Guard 1: Not a valid legal document.'),
+              is_valid_circular: finalIsValid,
+              document_kind: parsedKind,
+              category: normalizeDocumentCategory(parsed.category || syncGate.category),
+              confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.92,
+              rejection_reason: finalIsValid
+                ? undefined
+                : (parsed.rejection_reason || syncGate.rejection_reason || 'Document rejected by Guard 1: Not a valid government scheme circular, order, notification, amendment, or guidelines document.'),
             };
           }
         }
@@ -1220,14 +1413,17 @@ Respond strictly in JSON with keys:
     return syncGate;
   })();
 
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<Guard1InputGate>((resolve) => {
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       console.warn('⚠️ [GUARD 1 TIMEOUT] AI classification timed out after 10s. Defaulting to deterministic rule engine gate.');
       resolve(syncGate);
     }, 10000);
   });
 
-  return Promise.race([aiClassificationPromise, timeoutPromise]);
+  return Promise.race([aiClassificationPromise, timeoutPromise]).finally(() => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  });
 }
 
 export function runGuard1InputGate(text: string): Guard1InputGate {
@@ -1237,11 +1433,12 @@ export function runGuard1InputGate(text: string): Guard1InputGate {
   // Rule 1: Minimal text length check
   if (trimmed.length < 25) {
     return {
-      is_legal_document: false,
+      is_valid_circular: false,
+      document_kind: 'other',
       category: 'other',
       confidence: 0.95,
       rejection_reason:
-        'Document rejected by Guard 1: The provided text is too short to be a valid legal contract or agreement. Please upload a complete document.',
+        'Document rejected by Guard 1: The provided text is too short to be a valid government circular or scheme guideline. Please upload a complete document.',
     };
   }
 
@@ -1280,15 +1477,16 @@ export function runGuard1InputGate(text: string): Guard1InputGate {
   }
   if (examMatches >= 2 || (lower.includes('exam') && lower.includes('question'))) {
     return {
-      is_legal_document: false,
+      is_valid_circular: false,
+      document_kind: 'other',
       category: 'other',
       confidence: 0.99,
       rejection_reason:
-        'Document rejected by Guard 1: This content appears to be a school examination or test paper, not a legal contract or agreement.',
+        'Document rejected by Guard 1: This content appears to be an examination or test paper, not a government scheme circular or policy document.',
     };
   }
 
-  // Rule 3: Negative Classifier - News Article / Editorial / Blog / Media Report / Tech Article
+  // Rule 3: Negative Classifier - News Article / Editorial / Blog / Media Report
   const newsKeywords = [
     'breaking news',
     'reported by',
@@ -1297,19 +1495,16 @@ export function runGuard1InputGate(text: string): Guard1InputGate {
     'journalism',
     'daily news',
     'editorial board',
-    'press release',
     'headline news',
     'reuters staff',
     'associated press',
     'announced yesterday',
-    'officials said',
     'commuters expressed',
     'said one resident',
     'sources said',
     'according to reports',
     'news agency',
     'correspondent',
-    'bureau',
     'spokesperson said',
     'in a statement yesterday',
     'reporting from',
@@ -1331,15 +1526,16 @@ export function runGuard1InputGate(text: string): Guard1InputGate {
 
   if (newsMatches >= 1 || hasNewsDateline) {
     return {
-      is_legal_document: false,
+      is_valid_circular: false,
+      document_kind: 'other',
       category: 'other',
       confidence: 0.97,
       rejection_reason:
-        'Document rejected by Guard 1: This content appears to be a news article, blog post, or editorial piece, not a legal document.',
+        'Document rejected by Guard 1: This content appears to be a news article, blog post, or editorial piece, not a government circular.',
     };
   }
 
-  // Rule 3b: Negative Classifier - Technical Documentation / Engineering Walkthroughs / Tech Specs / Developer Notes / Resumes (English & Kannada)
+  // Rule 3b: Negative Classifier - Technical Documentation / Engineering Changelogs / Resumes
   const techKeywords = [
     'walkthrough',
     'changelog',
@@ -1388,20 +1584,6 @@ export function runGuard1InputGate(text: string): Guard1InputGate {
     'professional summary',
     'references available upon request',
     'file:///',
-    'सॉफ्टवेयर आर्किटेक्चर',
-    'इंजीनियरिंग मैनुअल',
-    'तकनीकी विनिर्देश',
-    'माइक्रोसर्विसेज',
-    'आर्किटेक्चर गहन विश्लेषण',
-    'प्रणाली डिजाइन',
-    'ऑर्केस्ट्रेशन',
-    'डेटाबेस अनुक्रमणिका',
-    'मेमोरी प्रबंधन',
-    'प्रोटोकॉल अनुकूलन',
-    'तकनीकी दस्तावेज़ीकरण',
-    'डेवलपर नोट्स',
-    'सोर्स कोड',
-    'प्रोग्रामिंग दिशानिर्देश',
   ];
 
   let techMatches = 0;
@@ -1409,11 +1591,11 @@ export function runGuard1InputGate(text: string): Guard1InputGate {
     if (lower.includes(kw)) techMatches += 1;
   }
 
-  const firstLines = trimmed.split(/\r?\n/).slice(0, 3).join(' ').toLowerCase();
-  const isExplicitLegalHeader =
-    (/^#?\s*(legal|rental|lease|tenancy|employment|service|sale|loan|mortgage|purchase|partnership|consulting|vendor)\b/i.test(firstLines) &&
-      /\b(workspace|agreement|contract|document|policy|notice|deed|terms|statement|mou|brief|form|directive|rules|guidelines|letter)\b/i.test(firstLines)) ||
-    /^(मुख्य|व्यावसायिक|किराया|पट्टा|रोजगार|सेवा|अनुबंध|करार|शपथ|ऋण|विक्रय)/i.test(firstLines);
+  const firstLines = trimmed.split(/\r?\n/).slice(0, 4).join(' ').toLowerCase();
+  const isExplicitCircularHeader =
+    (/\b(g\.?\s*o\.?|government order|office memorandum|o\.?\s*m\.?|circular|notification|corrigendum|addendum|gazette|scheme guidelines|operational guidelines|implementation guidelines)\b/i.test(firstLines) &&
+      /\b(no\.?|number|dated|government|ministry|department|directorate|scheme|yojana|welfare|subsidy|mission|amendment|eligibility)\b/i.test(firstLines)) ||
+    /\b(government of\s+[a-z\s]+|ministry of\s+[a-z\s]+|department of\s+[a-z\s]+)\b/i.test(firstLines);
 
   const hasStrongTechIndicator =
     lower.includes('walkthrough') ||
@@ -1425,25 +1607,21 @@ export function runGuard1InputGate(text: string): Guard1InputGate {
     lower.includes('curriculum vitae') ||
     lower.includes('architecture diagram') ||
     lower.includes('technical specification') ||
-    lower.includes('file:///') ||
-    lower.includes('सॉफ्टवेयर आर्किटेक्चर') ||
-    lower.includes('इंजीनियरिंग मैनुअल') ||
-    lower.includes('तकनीकी विनिर्देश') ||
-    lower.includes('माइक्रोसर्विसेज') ||
-    lower.includes('आर्किटेक्चर गहन विश्लेषण');
+    lower.includes('file:///');
 
-  if (!isExplicitLegalHeader && (techMatches >= 2 || hasStrongTechIndicator)) {
+  if (!isExplicitCircularHeader && (techMatches >= 2 || hasStrongTechIndicator)) {
     return {
-      is_legal_document: false,
+      is_valid_circular: false,
+      document_kind: 'other',
       category: 'other',
       confidence: 0.98,
       rejection_reason:
-        'Document rejected by Guard 1: This content appears to be technical documentation, an engineering changelog, developer notes, or a non-legal specification, not a legal contract or agreement.',
+        'Document rejected by Guard 1: This content appears to be technical documentation, developer notes, or a resume rather than a government circular.',
     };
   }
 
-  // Rule 4: Negative Classifier - Random Photo / Non-Legal Media / Recipe
-  const nonLegalMediaKeywords = [
+  // Rule 4: Negative Classifier - Random Photo / Non-Document Media / Recipe
+  const nonDocumentMediaKeywords = [
     'unrelated photograph',
     'scenic photo',
     'random photo',
@@ -1455,13 +1633,14 @@ export function runGuard1InputGate(text: string): Guard1InputGate {
     'flower garden',
     'shot on iphone',
   ];
-  if (nonLegalMediaKeywords.some((kw) => lower.includes(kw))) {
+  if (nonDocumentMediaKeywords.some((kw) => lower.includes(kw))) {
     return {
-      is_legal_document: false,
+      is_valid_circular: false,
+      document_kind: 'other',
       category: 'other',
       confidence: 0.98,
       rejection_reason:
-        'Document rejected by Guard 1: The uploaded image or file does not contain readable legal document text or signatures.',
+        'Document rejected by Guard 1: The uploaded image or file does not contain readable government circular text.',
     };
   }
 
@@ -1485,292 +1664,287 @@ export function runGuard1InputGate(text: string): Guard1InputGate {
   ];
   if (casualPhrases.some((phrase) => lower.includes(phrase))) {
     return {
-      is_legal_document: false,
+      is_valid_circular: false,
+      document_kind: 'other',
       category: 'other',
       confidence: 0.98,
       rejection_reason:
-        'Document rejected by Guard 1: The provided text is general informational text or conversation, not a legal contract or agreement. Please upload or paste a valid legal document.',
+        'Document rejected by Guard 1: The provided text is general conversation or casual text, not a government scheme circular or policy document.',
     };
   }
 
-  // Rule 5: Substantive Legal Criteria & Legal Document Indicators
-  const legalPartyIndicators = [
-    'employer',
-    'employee',
-    'company',
-    'client',
-    'contractor',
+  // Rule 5: Government Authority & Policy Document Indicators (vs Private Contracts)
+  const govAuthorityIndicators = [
+    'government of',
+    'govt. of',
+    'govt of',
+    'ministry of',
+    'department of',
+    'directorate of',
+    'commissionerate',
+    'secretariat',
+    'central government',
+    'state government',
+    'gazette',
+    'extraordinary gazette',
+    'office memorandum',
+    'government order',
+    'g.o.',
+    'g.o.ms',
+    'g.o.(rt)',
+    'o.m. no',
+    'circular no',
+    'notification no',
+    'proceedings of',
+    'nodal agency',
+    'implementing agency',
+    'district collector',
+    'collectorate',
+    'tehsildar',
+    'gram panchayat',
+    'municipal corporation',
+    'public notice',
+    'corrigendum',
+    'addendum',
+    'scheme guidelines',
+    'operational guidelines',
+    'implementation guidelines',
+    'yojana',
+    'abhiyan',
+    'pradhan mantri',
+    'mukhyamantri',
+  ];
+
+  const schemeSubstanceIndicators = [
+    'scheme',
+    'circular',
+    'notification',
+    'guideline',
+    'guidelines',
+    'eligibility',
+    'eligible',
+    'beneficiary',
+    'beneficiaries',
+    'benefit',
+    'benefits',
+    'subsidy',
+    'grant',
+    'grant-in-aid',
+    'scholarship',
+    'stipend',
+    'pension',
+    'financial assistance',
+    'ex-gratia',
+    'incentive',
+    'income limit',
+    'annual income',
+    'family income',
+    'household income',
+    'age limit',
+    'bpl',
+    'apl',
+    'ews',
+    'aadhaar',
+    'ration card',
+    'direct benefit transfer',
+    'dbt',
+    'required documents',
+    'documents required',
+    'income certificate',
+    'caste certificate',
+    'domicile',
+    'residence proof',
+    'application process',
+    'how to apply',
+    'online portal',
+    'last date',
+    'deadline',
+    'cut-off',
+    'effective from',
+    'w.e.f',
+    'disbursement',
+    'sanctioned',
+    'in partial modification',
+    'in supersession of',
+    'supersession',
+    'amendment',
+    'amended',
+    'hereby notifies',
+    'hereby notified',
+    'exclusion',
+    'disqualification',
+    'grievance',
+    'nodal officer',
+  ];
+
+  let authorityCount = 0;
+  for (const kw of govAuthorityIndicators) {
+    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = kw.includes(' ') || kw.includes('.') ? new RegExp(escaped, 'i') : new RegExp(`\\b${escaped}\\b`, 'i');
+    if (regex.test(lower)) {
+      authorityCount += 1;
+    }
+  }
+
+  let substanceCount = 0;
+  for (const kw of schemeSubstanceIndicators) {
+    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = kw.includes(' ') || kw.includes('.') ? new RegExp(escaped, 'i') : new RegExp(`\\b${escaped}\\b`, 'i');
+    if (regex.test(lower)) {
+      substanceCount += 1;
+    }
+  }
+
+  // Rule 5b: Reject Private Legal Contracts (leases, NDAs, employment offers, private loans, sale deeds)
+  const privateContractIndicators = [
+    'residential lease agreement',
+    'residential tenancy agreement',
+    'tenancy agreement',
     'lessor',
     'lessee',
-    'tenant',
     'landlord',
-    'borrower',
-    'lender',
-    'buyer',
-    'seller',
-    'disclosing party',
-    'receiving party',
-    'affiant',
-    'licensor',
-    'licensee',
-    'parties',
-    'party',
-    'director',
-    'manager',
-    'consultant',
-    'traders',
-    'department',
-    'applicant',
-    'candidate',
-    'signatory',
-    'undersigned',
-    'offeree',
-    'offeror',
-    'principal',
-    'agent',
-    'promisor',
-    'promisee',
-    'worker',
-    'executive',
-    'management',
-    'hr',
-    'firm',
-    'agency',
-    'pvt ltd',
-    'ltd',
-    'limited',
-    'inc',
-    'corp',
-    'लेंडर',
-    'उधारकर्ता',
-    'रोजगार',
-    'नियोक्ता',
-    'कर्मचारी',
-    'कंपनी',
-    'क्लाइंट',
-    'ठेकेदार',
-    'मकान मालिक',
-    'किराएदार',
-    'ऋणी',
-    'ऋणदाता',
-    'खरीदार',
-    'विक्रेता',
-    'विभाग',
-    'उम्मीदवार',
-    'आवेदक',
-    'हस्ताक्षरकर्ता',
-    'अधिकारी',
-    'प्रबंधक',
-    'मानव संसाधन',
-    'ब्लू रिज ट्रेडर्स',
-    'संजय पटेल',
-    'पार्टी',
-    'पक्ष',
-    'प्रथम पक्ष',
-    'द्वितीय पक्ष',
-  ];
-
-  const legalObligationIndicators = [
-    'offer letter',
-    'employment offer',
-    'appointment letter',
-    'shall agree',
-    'hereby agree',
-    'agrees to pay',
-    'shall pay',
-    'shall indemnify',
-    'shall be liable',
-    'in witness whereof',
-    'terms and conditions set forth',
-    'governing law',
-    'jurisdiction of courts',
-    'notice period of',
     'security deposit',
     'monthly rent',
-    'fixed salary',
-    'liquidated damages',
     'non-disclosure agreement',
+    'disclosing party',
+    'receiving party',
     'confidential information',
+    'employment agreement',
+    'employment offer letter',
+    'offer letter',
+    'appointment letter',
+    'probation',
+    'service bond',
+    'loan agreement',
     'promissory note',
+    'borrower',
+    'lender',
     'power of attorney',
     'deed of sale',
-    'memorandum of understanding',
-    'covenant',
-    'undertake',
-    'hereby',
-    'rent',
-    'salary',
-    'notice period',
-    'probation',
-    'bond',
-    'remuneration',
-    'effective date',
-    'termination',
-    'confidential',
-    'indemnify',
-    'liable',
-    'jurisdiction',
-    'governing law',
+    'sale deed',
+    'gift deed',
+    'liquidated damages',
+    'arbitration and conciliation act',
+    'non-compete',
     'in witness whereof',
-    'signatures',
-    'signature',
-    'signed',
-    'terms and conditions',
-    'agreement',
-    'contract',
-    'deed',
-    'mou',
-    'affidavit',
-    'power of attorney',
-    'ऋण',
-    'ब्याज',
-    'प्रस्ताव',
-    'प्रस्ताव पत्र',
-    'रोजगार प्रस्ताव',
-    'नियुक्ति',
-    'सहमति',
-    'सहमत',
-    'होगा',
-    'करेगा',
-    'प्रतिज्ञा',
-    'वचन',
-    'किराया',
-    'वेतन',
-    'माह',
-    'प्रति माह',
-    'भुगतान',
-    'जमानत',
-    'नोटिस अवधि',
-    'परिवीक्षा',
-    'परिवीक्षा काल',
-    'बॉन्ड',
-    'बॉण्ड',
-    'सीटीसी',
-    'मुआवजा',
-    'कार्य के घंटे',
-    'कार्यभार',
-    'प्रभावी तिथि',
-    'समाप्त',
-    'त्यागपत्र',
-    'गोपनीय',
-    'क्षतिपूर्ति',
-    'उत्तरदायी',
-    'क्षेत्राधिकार',
-    'लागू कानून',
-    'हस्ताक्षर',
-    'शर्तें',
-    'नियम',
-    'अनुबंध',
-    'करार',
-    'दस्तावेज़',
-    'स्टाम्प',
-    'रू.',
-    'रु.',
-    'रुपये',
-    'पुनर्भुगतान',
-    'प्रशिक्षण लागत',
+    'pvt ltd',
+    'pvt. ltd.',
   ];
 
-  let partyCount = 0;
-  for (const partyKw of legalPartyIndicators) {
-    const escaped = partyKw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = /[\u0900-\u097F\u0C80-\u0CFF]/.test(partyKw) || partyKw.includes(' ') ? new RegExp(escaped, 'i') : new RegExp(`\\b${escaped}\\b`, 'i');
+  let privateContractCount = 0;
+  for (const kw of privateContractIndicators) {
+    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = kw.includes(' ') || kw.includes('.') ? new RegExp(escaped, 'i') : new RegExp(`\\b${escaped}\\b`, 'i');
     if (regex.test(lower)) {
-      partyCount += 1;
+      privateContractCount += 1;
     }
   }
 
-  let obligationCount = 0;
-  for (const obKw of legalObligationIndicators) {
-    const escaped = obKw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = /[\u0900-\u097F\u0C80-\u0CFF]/.test(obKw) || obKw.includes(' ') ? new RegExp(escaped, 'i') : new RegExp(`\\b${escaped}\\b`, 'i');
-    if (regex.test(lower)) {
-      obligationCount += 1;
-    }
-  }
+  const hasExplicitPrivateTitle =
+    /\b(residential (lease|tenancy) agreement|non-disclosure agreement|nda|employment agreement|employment offer|offer letter|appointment letter|loan agreement|promissory note|power of attorney|deed of sale|sale deed|gift deed|service agreement)\b/i.test(
+      lower.slice(0, 600)
+    );
 
-  // Explicit Document Title/Header in top 600 characters or structured legal phrases
-  const topText = lower.slice(0, 600);
-  const hasExplicitHeaderTitle =
-    isExplicitLegalHeader ||
-    /\b(non-disclosure agreement|nda|offer letter|appointment letter|promissory note|power of attorney|affidavit|deed of sale|memorandum of understanding|mou)\b/i.test(topText) ||
-    /\bthis (agreement|contract|deed|lease) is (made|entered|executed)\b/i.test(topText) ||
-    /\b(residential lease agreement|employment agreement|employment contract|service agreement)\b/i.test(topText) ||
-    topText.includes('रोजगार प्रस्ताव') ||
-    topText.includes('प्रस्ताव पत्र') ||
-    topText.includes('नियुक्ति पत्र') ||
-    topText.includes('रोजगार अनुबंध') ||
-    topText.includes('किरायानामा') ||
-    topText.includes('ऋण समझौता') ||
-    topText.includes('गोपनीयता समझौता');
-
-  const hasLegalSubstance =
-    hasExplicitHeaderTitle ||
-    (partyCount >= 1 && obligationCount >= 2) ||
-    (partyCount >= 2 && obligationCount >= 1) ||
-    obligationCount >= 3;
-
-  if (!hasLegalSubstance) {
+  if (!isExplicitCircularHeader && authorityCount === 0 && (hasExplicitPrivateTitle || privateContractCount >= 2)) {
     return {
-      is_legal_document: false,
+      is_valid_circular: false,
+      document_kind: 'other',
       category: 'other',
-      confidence: 0.88,
+      confidence: 0.96,
       rejection_reason:
-        'Document rejected by Guard 1: The provided text lacks essential legal document structure (no identifiable contracting parties, binding terms, or legal obligations).',
+        'Document rejected by Guard 1: This appears to be a private legal contract or personal agreement rather than an official government circular, order, notification, amendment, or scheme guideline.',
     };
   }
 
-  // Category Detection for valid documents
-  let detectedCategory: DocumentCategory = 'other';
-  if (lower.includes('rent') || lower.includes('tenant') || lower.includes('lessor') || lower.includes('lease') || lower.includes('किराया') || lower.includes('किराएदार') || lower.includes('मकान मालिक') || lower.includes('किरायानामा')) {
-    detectedCategory = 'rental/lease agreement';
-  } else if (
-    lower.includes('employee') ||
-    lower.includes('employer') ||
-    lower.includes('ctc') ||
-    lower.includes('salary') ||
-    lower.includes('employment') ||
-    lower.includes('offer') ||
-    lower.includes('appointment') ||
-    lower.includes('रोजगार') ||
-    lower.includes('प्रस्ताव') ||
-    lower.includes('नियुक्ति') ||
-    lower.includes('वेतन') ||
-    lower.includes('परिवीक्षा') ||
-    lower.includes('कर्मचारी') ||
-    lower.includes('नियोक्ता') ||
-    lower.includes('बॉन्ड') ||
-    lower.includes('नोटिस अवधि')
-  ) {
-    detectedCategory = 'employment contract';
-  } else if (lower.includes('non-disclosure') || lower.includes('confidential') || lower.includes('nda') || lower.includes('गोपनीयता') || lower.includes('गैर-प्रकटीकरण')) {
-    detectedCategory = 'NDA';
-  } else if (lower.includes('loan') || lower.includes('borrower') || lower.includes('lender') || lower.includes('interest rate') || lower.includes('promissory') || lower.includes('ऋण') || lower.includes('ऋणदाता') || lower.includes('उधारकर्ता') || lower.includes('ब्याज')) {
-    detectedCategory = 'loan agreement/promissory note';
-  } else if (lower.includes('sale') || lower.includes('purchaser') || lower.includes('conveyance') || lower.includes('बिक्री') || lower.includes('विक्रेता') || lower.includes('खरीदार') || lower.includes('बैनामा')) {
-    detectedCategory = 'sale agreement/deed';
+  // Rule 6: Verify sufficient Government Circular / Scheme Policy substance
+  const topText = lower.slice(0, 600);
+  const hasExplicitHeaderTitle =
+    isExplicitCircularHeader ||
+    /\b(government order|office memorandum|scheme circular|official notification|corrigendum|addendum|partial modification|operational guidelines|scheme guidelines|public notice|gazette notification)\b/i.test(
+      topText
+    );
+
+  const hasCircularSubstance =
+    (hasExplicitHeaderTitle && (authorityCount >= 1 || substanceCount >= 1)) ||
+    (authorityCount >= 1 && substanceCount >= 2) ||
+    (authorityCount >= 2 && substanceCount >= 1) ||
+    substanceCount >= 4;
+
+  if (!hasCircularSubstance) {
+    return {
+      is_valid_circular: false,
+      document_kind: 'other',
+      category: 'other',
+      confidence: 0.89,
+      rejection_reason:
+        'Document rejected by Guard 1: The provided text lacks essential government circular structure (no issuing government authority, scheme reference, notification/order header, or policy provisions).',
+    };
+  }
+
+  // Detect Document Kind
+  let detectedKind: CircularDocumentKind = 'scheme_circular';
+  if (/\b(amendment|corrigendum|addendum|partial modification|in supersession of)\b/i.test(lower)) {
+    detectedKind = 'amendment';
+  } else if (/\b(g\.?\s*o\.?|government order|office memorandum|o\.?\s*m\.?\s*no|proceedings of)\b/i.test(lower)) {
+    detectedKind = 'government_order';
+  } else if (/\b(notification|gazette|hereby notifies|hereby notified|public notice)\b/i.test(lower)) {
+    detectedKind = 'notification';
+  } else if (/\b(scheme guidelines|operational guidelines|implementation guidelines|standard operating procedure)\b/i.test(lower)) {
+    detectedKind = 'scheme_guidelines';
+  } else if (/\b(circular|scheme|yojana|mission|abhiyan)\b/i.test(lower)) {
+    detectedKind = 'scheme_circular';
+  }
+
+  // Detect Scheme / Policy Category
+  let detectedCategory: DocumentCategory = 'scheme circular';
+  if (lower.includes('scholarship') || lower.includes('student') || lower.includes('tuition') || lower.includes('fellowship') || lower.includes('education')) {
+    detectedCategory = 'education & scholarship';
+  } else if (lower.includes('farmer') || lower.includes('kisan') || lower.includes('crop') || lower.includes('agriculture') || lower.includes('irrigation') || lower.includes('msp')) {
+    detectedCategory = 'agriculture & farmer support';
+  } else if (lower.includes('health') || lower.includes('medical') || lower.includes('hospital') || lower.includes('arogya') || lower.includes('ayushman') || lower.includes('maternity')) {
+    detectedCategory = 'healthcare & insurance';
+  } else if (lower.includes('housing') || lower.includes('awas') || lower.includes('shelter') || lower.includes('sanitation') || lower.includes('urban development')) {
+    detectedCategory = 'housing & infrastructure';
+  } else if (lower.includes('skill') || lower.includes('apprentice') || lower.includes('rozgar') || lower.includes('livelihood') || lower.includes('self-help group')) {
+    detectedCategory = 'employment & skill development';
+  } else if (lower.includes('msme') || lower.includes('startup') || lower.includes('mudra') || lower.includes('enterprise') || lower.includes('collateral-free loan')) {
+    detectedCategory = 'msme & business grant';
+  } else if (lower.includes('pension') || lower.includes('ration') || lower.includes('subsidy') || lower.includes('welfare') || lower.includes('senior citizen') || lower.includes('widow')) {
+    detectedCategory = 'welfare & subsidy scheme';
+  } else if (detectedKind === 'amendment') {
+    detectedCategory = 'policy amendment';
+  } else if (detectedKind === 'government_order') {
+    detectedCategory = 'government order';
+  } else if (detectedKind === 'notification') {
+    detectedCategory = 'official notification';
+  } else if (detectedKind === 'scheme_guidelines') {
+    detectedCategory = 'scheme guidelines';
   }
 
   return {
-    is_legal_document: true,
+    is_valid_circular: true,
+    document_kind: detectedKind,
     category: detectedCategory,
-    confidence: detectedCategory !== 'other' ? 0.95 : 0.86,
+    confidence: detectedCategory === 'scheme circular' ? 0.90 : 0.95,
   };
 }
 
-// Guard 2b: Legal Safety & Intent Filter
+// Guard 2b: Citizen Safety & Anti-Misuse Filter
 export function runGuard2bSafetyFilter(text: string): { isSafe: boolean; reason?: string } {
   const query = text.toLowerCase();
   const illegalPatterns = [
     'how to forge',
+    'fake certificate',
+    'fake income certificate',
+    'fake caste certificate',
     'fake contract',
     'evade tax',
     'launder money',
     'bribe',
     'fabricate document',
     'fraudulent claim',
+    'fake beneficiary',
     'break law without getting caught',
-    'backdate contract illegally',
   ];
 
   for (const pattern of illegalPatterns) {
@@ -1778,7 +1952,7 @@ export function runGuard2bSafetyFilter(text: string): { isSafe: boolean; reason?
       return {
         isSafe: false,
         reason:
-          'LegalLens safety guardrail activated: We cannot assist with illegal intent, document forgery, tax evasion, or fraud. Under the Advocates Act and DPDP Act guidelines, our service strictly promotes legal compliance and awareness.',
+          'GovScheme Diff safety guardrail activated: We cannot assist with document forgery, fake scheme claims, bribery, or fraud. This service provides plain-language explanations of official public scheme circulars.',
       };
     }
   }
@@ -1817,54 +1991,135 @@ export function verifyGuard2aGrounding(
   return { isSafe: true, isGrounded: true, groundedConsequence: consequenceText };
 }
 
-// Stage 2: Clause Chunking & Taxonomy Typing (Top-Level Contractual Provision Granularity)
+function extractSectionReference(line: string, fallbackIndex: number): { sectionRef: string; clauseNumber: string } {
+  const trimmed = line.trim();
+
+  const annexMatch = trimmed.match(/^(ANNEXURE|SCHEDULE|APPENDIX)\s*[-:]?\s*([A-Z0-9IVXLCDM]+)/i);
+  if (annexMatch) {
+    const label = `${annexMatch[1].charAt(0).toUpperCase() + annexMatch[1].slice(1).toLowerCase()} ${annexMatch[2].toUpperCase()}`;
+    return { sectionRef: label, clauseNumber: annexMatch[2].toUpperCase() };
+  }
+
+  const namedSecMatch = trimmed.match(/^(ARTICLE|SECTION|CLAUSE|PARA|PARAGRAPH|RULE|REGULATION)\s*[-:]?\s*(\d+|[IVXLCDM]+)/i);
+  if (namedSecMatch) {
+    const kind = namedSecMatch[1].charAt(0).toUpperCase() + namedSecMatch[1].slice(1).toLowerCase();
+    const num = namedSecMatch[2].toUpperCase();
+    return { sectionRef: `${kind} ${num}`, clauseNumber: num };
+  }
+
+  const numMatch = trimmed.match(/^(\d+)[\.\)]\s+/);
+  if (numMatch) {
+    return { sectionRef: `Section ${numMatch[1]}`, clauseNumber: numMatch[1] };
+  }
+
+  if (/^(G\.?\s*O\.?|GOVERNMENT ORDER|OFFICE MEMORANDUM|O\.?\s*M\.?|CIRCULAR NO|NOTIFICATION NO|CORRIGENDUM|ADDENDUM|SUBJECT:|SUB:)/i.test(trimmed)) {
+    return { sectionRef: 'Circular Header', clauseNumber: `${fallbackIndex}` };
+  }
+
+  return { sectionRef: `Section ${fallbackIndex}`, clauseNumber: `${fallbackIndex}` };
+}
+
+// Stage 2: Government Circular Section & Clause Chunking (Preserves Page Numbers & Section References)
 export function chunkDocumentTextIntoClauses(text: string): SimplifiedClause[] {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-  const blocks: { title?: string; text: string }[] = [];
+  const blocks: { title?: string; text: string; pageNumber: number; sectionRef?: string; clauseNumber?: string }[] = [];
 
   let currentBlockText: string[] = [];
   let currentBlockTitle: string | undefined = undefined;
+  let currentPageNumber = 1;
+  let currentBlockStartPage = 1;
+  let currentSectionRef: string | undefined = undefined;
+  let currentClauseNumber: string | undefined = undefined;
+
+  const CIRCULAR_NAMED_HEADINGS =
+    /^(?:ELIGIBILITY(?:\s+CRITERIA|\s+CONDITIONS)?|BENEFITS?(?:\s+AND\s+ASSISTANCE)?|FINANCIAL\s+ASSISTANCE|SCALE\s+OF\s+ASSISTANCE|INCOME\s+(?:LIMIT|CEILING)|AGE\s+LIMIT|REQUIRED\s+DOCUMENTS|DOCUMENTS\s+REQUIRED|HOW\s+TO\s+APPLY|APPLICATION\s+(?:PROCESS|PROCEDURE)|SELECTION\s+(?:PROCESS|PROCEDURE)|DEADLINES?|LAST\s+DATE|VALIDITY|EXCLUSIONS?|DISQUALIFICATIONS?|AMENDMENTS?|CORRIGENDUM|ADDENDUM|PARTIAL\s+MODIFICATION|IMPLEMENTATION|VERIFICATION(?:\s+AND\s+DISBURSEMENT)?|GRIEVANCE\s+REDRESSAL|NODAL\s+(?:OFFICER|AGENCY)|OBJECTIVE|OVERVIEW|INTRODUCTION|BACKGROUND)\s*:?$/i;
 
   for (const line of lines) {
-    // Filter header/footer artifacts from multi-page PDFs
-    if (/^(CONFIDENTIAL & PRIVILEGED|CONTRACT REF:|Page \d+ of \d+|\d+\s+of\s+\d+$)/i.test(line)) {
+    // 1. Detect explicit page markers & update currentPageNumber (never include marker in clause text)
+    const explicitMarkerMatch = line.match(/^(?:---\s*Page\s+(\d+)\s*---|\[Page\s+(\d+)\]|Page\s+(\d+)\s+of\s+\d+)$/i);
+    if (explicitMarkerMatch) {
+      const parsedPage = parseInt(explicitMarkerMatch[1] || explicitMarkerMatch[2] || explicitMarkerMatch[3], 10);
+      if (!isNaN(parsedPage) && parsedPage >= 1) {
+        currentPageNumber = parsedPage;
+      }
       continue;
     }
 
-    const isDecimalSubPoint = /^\s*\d+\.\d+/.test(line);
-    const isSubParenthesis = /^\s*\([a-z0-9]+\)/i.test(line);
-    const isSubLetterDot = /^\s*[a-z]\.\s+/i.test(line);
+    // Filter inline header/footer pagination artifacts
+    if (/^(CONFIDENTIAL & PRIVILEGED|CONTRACT REF:|--\s*\d+\s+of\s+\d+\s*--|\d+\s+of\s+\d+$)/i.test(line)) {
+      const inlinePageOf = line.match(/^(\d+)\s+of\s+\d+$/i);
+      if (inlinePageOf) {
+        currentPageNumber = Math.max(1, parseInt(inlinePageOf[1], 10));
+      }
+      continue;
+    }
 
-    // Top-Level Heading Triggers:
-    // 1) Explicit ARTICLE / SECTION / CLAUSE headers (e.g. "ARTICLE 2: 2. SCOPE OF SERVICES")
-    const isArticleOrSectionHeader = /^\s*(?:ARTICLE|SECTION|CLAUSE)\s+(?:\d+|[IVXLCDM]+)[\s:\.\-]/i.test(line);
-    // 2) Top-Level single-number header (e.g. "1. DEFINITIONS AND INTERPRETATION", "2. RENT:", "1. वेतन (SALARY):", "5. बॉन्ड (BOND):")
-    const isTopLevelNumberedHeader = !isDecimalSubPoint && /^\s*\d+[\.\)]\s+[\p{L}\p{N}]/u.test(line);
-    // 3) Standalone Formal Section Keywords
-    const isFormalSectionHeader = /^\s*(?:WHEREAS|RECITALS|PREAMBLE|IN WITNESS WHEREOF|EXECUTION|ATTESTATION)\b/i.test(line);
-    // 4) Document Title Header
-    const isDocTitleLine = (blocks.length === 0 && currentBlockText.length === 0 && line === line.toUpperCase() && line.length >= 6 && line.length <= 80);
+    // If line ends with embedded "Page X of Y", capture page number and strip footer
+    let cleanLine = line;
+    const embeddedPageMatch = cleanLine.match(/\bPage\s+(\d+)\s+of\s+\d+\b/i);
+    if (embeddedPageMatch) {
+      currentPageNumber = Math.max(1, parseInt(embeddedPageMatch[1], 10));
+      cleanLine = cleanLine.replace(/\bPage\s+\d+\s+of\s+\d+\b/gi, '').trim();
+      if (!cleanLine) continue;
+    }
+
+    const isDecimalSubPoint = /^\s*\d+\.\d+/.test(cleanLine);
+    const isSubParenthesis = /^\s*\([a-z0-9]+\)/i.test(cleanLine);
+    const isSubLetterDot = /^\s*[a-z]\.\s+/i.test(cleanLine);
+
+    // Top-Level Section / Circular Heading Triggers:
+    // 1) Explicit ARTICLE / SECTION / CLAUSE / PARA / ANNEXURE / SCHEDULE headers
+    const isArticleOrSectionHeader = /^\s*(?:ARTICLE|SECTION|CLAUSE|PARA|PARAGRAPH|ANNEXURE|SCHEDULE|APPENDIX)\s*[-:]?\s*(?:\d+|[IVXLCDM]+|[A-Z])(?:[\s:\.\-]|$)/i.test(cleanLine);
+    // 2) Top-Level single-number header (e.g. "1. ELIGIBILITY CRITERIA", "2) BENEFITS:")
+    const isTopLevelNumberedHeader = !isDecimalSubPoint && /^\s*\d+[\.\)]\s+[\p{L}\p{N}]/u.test(cleanLine);
+    // 3) Government Circular named section headings (e.g. "Eligibility Criteria:", "Required Documents", "Corrigendum")
+    const isNamedCircularHeading = CIRCULAR_NAMED_HEADINGS.test(cleanLine) || /^(?:Subject|Sub)\s*:/i.test(cleanLine);
+    // 4) Standalone Formal Section Keywords
+    const isFormalSectionHeader = /^\s*(?:WHEREAS|RECITALS|PREAMBLE|IN WITNESS WHEREOF|EXECUTION|ATTESTATION)\b/i.test(cleanLine);
+    // 5) Document Title / Uppercase Heading
+    const isDocTitleLine = (blocks.length === 0 && currentBlockText.length === 0 && cleanLine === cleanLine.toUpperCase() && cleanLine.length >= 6 && cleanLine.length <= 90);
+    const isUppercaseSectionLine =
+      cleanLine === cleanLine.toUpperCase() &&
+      /[A-Z]/.test(cleanLine) &&
+      cleanLine.length >= 6 &&
+      cleanLine.length <= 75 &&
+      !cleanLine.endsWith('.') &&
+      !/^RS\.?\s*\d/i.test(cleanLine);
 
     const isHeading = !isDecimalSubPoint && !isSubParenthesis && !isSubLetterDot && (
       isArticleOrSectionHeader ||
       isTopLevelNumberedHeader ||
+      isNamedCircularHeading ||
       isFormalSectionHeader ||
       isDocTitleLine ||
-      (line === line.toUpperCase() && line.length >= 6 && line.length <= 70 && !line.includes(':'))
+      isUppercaseSectionLine
     );
 
     if (isHeading && currentBlockText.length > 0) {
       blocks.push({
         title: currentBlockTitle,
         text: currentBlockText.join(' '),
+        pageNumber: currentBlockStartPage,
+        sectionRef: currentSectionRef,
+        clauseNumber: currentClauseNumber,
       });
-      currentBlockText = [line];
-      currentBlockTitle = extractHeadingTitle(line);
+      currentBlockText = [cleanLine];
+      currentBlockTitle = extractHeadingTitle(cleanLine);
+      currentBlockStartPage = currentPageNumber;
+      const refInfo = extractSectionReference(cleanLine, blocks.length + 1);
+      currentSectionRef = refInfo.sectionRef;
+      currentClauseNumber = refInfo.clauseNumber;
     } else {
-      if (!currentBlockTitle && currentBlockText.length === 0) {
-        currentBlockTitle = extractHeadingTitle(line);
+      if (currentBlockText.length === 0) {
+        currentBlockStartPage = currentPageNumber;
+        if (!currentBlockTitle) {
+          currentBlockTitle = extractHeadingTitle(cleanLine);
+        }
+        const refInfo = extractSectionReference(cleanLine, blocks.length + 1);
+        currentSectionRef = refInfo.sectionRef;
+        currentClauseNumber = refInfo.clauseNumber;
       }
-      currentBlockText.push(line);
+      currentBlockText.push(cleanLine);
     }
   }
 
@@ -1872,42 +2127,53 @@ export function chunkDocumentTextIntoClauses(text: string): SimplifiedClause[] {
     blocks.push({
       title: currentBlockTitle,
       text: currentBlockText.join(' '),
+      pageNumber: currentBlockStartPage,
+      sectionRef: currentSectionRef,
+      clauseNumber: currentClauseNumber,
     });
   }
 
   const validBlocks = blocks.filter((b) => b.text.length >= 15 && !isSignatureBlock(b.text));
 
   // Compute clause density telemetry signal
-  const pageMatch = text.match(/Page \d+ of (\d+)/gi);
+  const explicitPageMarkers = text.match(/(?:---\s*Page\s+(\d+)\s*---|\[Page\s+(\d+)\]|Page\s+\d+\s+of\s+(\d+))/gi);
   let estimatedPages = 1;
-  if (pageMatch && pageMatch.length > 0) {
-    const lastMatch = pageMatch[pageMatch.length - 1];
-    const numMatch = lastMatch.match(/of\s+(\d+)/i);
-    if (numMatch) {
-      estimatedPages = Math.max(1, parseInt(numMatch[1], 10));
+  if (explicitPageMarkers && explicitPageMarkers.length > 0) {
+    let maxSeen = 1;
+    for (const m of explicitPageMarkers) {
+      const nums = m.match(/\d+/g);
+      if (nums) {
+        const candidateNum = parseInt(nums[nums.length - 1], 10);
+        if (candidateNum > maxSeen) maxSeen = candidateNum;
+      }
     }
+    estimatedPages = maxSeen;
   } else {
     estimatedPages = Math.max(1, Math.round(text.length / 2500));
   }
 
   const clausesPerPage = (validBlocks.length / estimatedPages).toFixed(1);
-  console.log(`[Clause Processing Telemetry] Extracted ${validBlocks.length} clauses across estimated ${estimatedPages} page(s) (${clausesPerPage} clauses/page).`);
+  console.log(`[Circular Section Telemetry] Extracted ${validBlocks.length} sections across ${estimatedPages} page(s) (${clausesPerPage} sections/page).`);
 
-  if (parseFloat(clausesPerPage) > 6.0 || validBlocks.length > 50) {
-    console.warn(`[Clause Density Warning] High clause density detected: ${validBlocks.length} clauses across ${estimatedPages} page(s) (${clausesPerPage} clauses/page). Clause fragmentation checked.`);
+  if (parseFloat(clausesPerPage) > 8.0 || validBlocks.length > 60) {
+    console.warn(`[Section Density Warning] High section density detected: ${validBlocks.length} sections across ${estimatedPages} page(s) (${clausesPerPage} sections/page).`);
   }
 
   return validBlocks.map((b, idx) => {
     const origText = b.text;
     const clauseType = classifyClauseType(origText, b.title);
-    const title = b.title && b.title.trim().length > 0 ? cleanClauseTitle(b.title, idx + 1) : `Clause ${idx + 1}: ${getClauseTypeLabel(clauseType)}`;
+    const title = b.title && b.title.trim().length > 0 ? cleanClauseTitle(b.title, idx + 1) : `Section ${idx + 1}: ${getClauseTypeLabel(clauseType)}`;
+    const clauseNum = b.clauseNumber || `${idx + 1}`;
+    const sectionRef = b.sectionRef || `Section ${clauseNum}`;
 
     return {
       id: `clause_${idx + 1}`,
-      clause_number: `${idx + 1}`,
+      clause_number: clauseNum,
       clause_type: clauseType,
       title,
       original_text: origText,
+      page_number: b.pageNumber,
+      section_reference: sectionRef,
       simple_explanation: null,
       very_simple_explanation: null,
       meaning_error: true,
@@ -1963,96 +2229,156 @@ function classifyClauseType(text: string, title?: string): ClauseType {
 
   // Heading title checks FIRST if available
   if (titleLower) {
-    if (titleLower.includes('dispute') || titleLower.includes('arbitrat') || titleLower.includes('विवाद')) return normalizeClauseType('dispute resolution/arbitration');
-    if (titleLower.includes('indemnit') || titleLower.includes('क्षतिपूर्ति')) return normalizeClauseType('indemnity');
-    if (titleLower.includes('non-compete') || titleLower.includes('non compete')) return normalizeClauseType('non-compete/non-solicitation');
-    if (titleLower.includes('security deposit') || titleLower.includes('deposit') || titleLower.includes('जमानत')) return normalizeClauseType('security deposit');
-    if (titleLower.includes('rent escalation') || titleLower.includes('escalation')) return normalizeClauseType('rent escalation');
-    if (titleLower.includes('notice period') || titleLower.includes('notice') || titleLower.includes('नोटिस')) return normalizeClauseType('notice period');
-    if (titleLower.includes('maintenance') || titleLower.includes('repair')) return 'maintenance & repairs';
-    if (titleLower.includes('governing law') || titleLower.includes('jurisdiction') || titleLower.includes('क्षेत्राधिकार')) return normalizeClauseType('governing law & jurisdiction');
-    if (titleLower.includes('stamp duty') || titleLower.includes('registration') || titleLower.includes('स्टाम्प')) return normalizeClauseType('stamp duty & registration');
-    if (titleLower.includes('bond') || titleLower.includes('liquidated damages') || titleLower.includes('penalty') || titleLower.includes('बॉन्ड') || titleLower.includes('बॉण्ड') || titleLower.includes('प्रशिक्षण')) return normalizeClauseType('penalty/liquidated damages');
-    if (titleLower.includes('confidential') || titleLower.includes('गोपनीय')) return normalizeClauseType('confidentiality');
-    if (titleLower.includes('term') || titleLower.includes('probation') || titleLower.includes('lock-in') || titleLower.includes('duration') || titleLower.includes('परिवीक्षा')) return normalizeClauseType('term & termination');
-    if (titleLower.includes('rent') || titleLower.includes('compensation') || titleLower.includes('salary') || titleLower.includes('payment') || titleLower.includes('repayment') || titleLower.includes('interest') || titleLower.includes('principal') || titleLower.includes('वेतन')) return normalizeClauseType('payment/consideration');
-    if (titleLower.includes('premis') && titleLower.includes('term')) return normalizeClauseType('term & termination');
-    if (titleLower.includes('parties') || titleLower.includes('recital') || titleLower.includes('रोजगार प्रस्ताव') || titleLower.includes('प्रिय श्री')) return normalizeClauseType('parties & recitals');
+    if (titleLower.includes('amend') || titleLower.includes('corrigend') || titleLower.includes('addend') || titleLower.includes('modif') || titleLower.includes('supersed')) {
+      return 'amendment & supersession';
+    }
+    if (titleLower.includes('income') || titleLower.includes('age limit') || titleLower.includes('ceiling')) {
+      return 'income & age limits';
+    }
+    if (titleLower.includes('exclus') || titleLower.includes('disqualif') || titleLower.includes('ineligib')) {
+      return 'exclusions & disqualifications';
+    }
+    if (titleLower.includes('eligib') || titleLower.includes('beneficiar') || titleLower.includes('target group')) {
+      return 'eligibility criteria';
+    }
+    if (titleLower.includes('benefit') || titleLower.includes('subsid') || titleLower.includes('grant') || titleLower.includes('scholarship') || titleLower.includes('pension') || titleLower.includes('assistance')) {
+      return 'benefits & financial assistance';
+    }
+    if (titleLower.includes('document') || titleLower.includes('certificate') || titleLower.includes('enclosure')) {
+      return 'required documents';
+    }
+    if (titleLower.includes('deadline') || titleLower.includes('last date') || titleLower.includes('validity') || titleLower.includes('timeline') || titleLower.includes('schedule')) {
+      return 'deadlines & validity';
+    }
+    if (titleLower.includes('apply') || titleLower.includes('application') || titleLower.includes('portal') || titleLower.includes('procedure')) {
+      return 'application process';
+    }
+    if (titleLower.includes('grievance') || titleLower.includes('nodal') || titleLower.includes('helpline') || titleLower.includes('appeal')) {
+      return 'grievance & nodal authority';
+    }
+    if (titleLower.includes('implement') || titleLower.includes('verif') || titleLower.includes('disburse') || titleLower.includes('monitoring')) {
+      return 'implementation & verification';
+    }
+    if (titleLower.includes('overview') || titleLower.includes('objective') || titleLower.includes('background') || titleLower.includes('introduction') || titleLower.includes('circular') || titleLower.includes('government order')) {
+      return 'scheme overview & objective';
+    }
   }
 
   // Text-based checks
   if (
-    textLower.includes('agreement is made') ||
-    textLower.includes('contract is made') ||
-    textLower.includes('entered into on') ||
-    textLower.includes('by and between') ||
-    textLower.includes('रोजगार प्रस्ताव पत्र') ||
-    textLower.includes('प्रिय श्री')
+    textLower.includes('in partial modification') ||
+    textLower.includes('in supersession of') ||
+    textLower.includes('corrigendum') ||
+    textLower.includes('addendum') ||
+    textLower.includes('hereby amended') ||
+    textLower.includes('substituted with')
   ) {
-    return normalizeClauseType('parties & recitals');
-  }
-
-  if (textLower.includes('arbitrat') || textLower.includes('dispute resolution') || textLower.includes('conciliation act') || textLower.includes('tribunal') || textLower.includes('विवाद')) {
-    return normalizeClauseType('dispute resolution/arbitration');
-  }
-
-  if (textLower.includes('indemn') || textLower.includes('hold harmless') || textLower.includes('क्षतिपूर्ति')) {
-    return normalizeClauseType('indemnity');
-  }
-
-  if (textLower.includes('non-compete') || textLower.includes('competing business') || textLower.includes('restraint of trade') || textLower.includes('competitor')) {
-    return normalizeClauseType('non-compete/non-solicitation');
-  }
-
-  if (textLower.includes('confidential information') || textLower.includes('confidentiality') || textLower.includes('strict confidence') || textLower.includes('गोपनीय')) {
-    return normalizeClauseType('confidentiality');
-  }
-
-  if (textLower.includes('security deposit') || textLower.includes('interest-free deposit') || textLower.includes('deposit refund') || textLower.includes('deposit shall be refunded') || textLower.includes('सुरक्षा जमा')) {
-    return normalizeClauseType('security deposit');
-  }
-
-  if (textLower.includes('rent escalation') || textLower.includes('increase by 5%') || textLower.includes('increase by 10%') || textLower.includes('annual escalation')) {
-    return normalizeClauseType('rent escalation');
-  }
-
-  if (textLower.includes('service bond') || textLower.includes('liquidated damages') || textLower.includes('training cost') || textLower.includes('early exit penalty') || textLower.includes('penalty') || textLower.includes('बॉन्ड') || textLower.includes('बॉण्ड') || textLower.includes('प्रशिक्षण लागत') || textLower.includes('पुनर्भुगतान')) {
-    return normalizeClauseType('penalty/liquidated damages');
-  }
-
-  if (textLower.includes('notice period') || textLower.includes('days written notice') || textLower.includes('resignation notice') || textLower.includes('days notice') || textLower.includes('नोटिस अवधि') || textLower.includes('नोटिस')) {
-    return normalizeClauseType('notice period');
-  }
-
-  if (textLower.includes('maintenance') || textLower.includes('repairs')) {
-    return 'maintenance & repairs';
-  }
-
-  if (textLower.includes('governing law') || textLower.includes('jurisdiction') || textLower.includes('courts at') || textLower.includes('courts in') || textLower.includes('क्षेत्राधिकार')) {
-    return normalizeClauseType('governing law & jurisdiction');
-  }
-
-  if (textLower.includes('stamp paper') || textLower.includes('stamp duty') || textLower.includes('registration act') || textLower.includes('स्टाम्प')) {
-    return normalizeClauseType('stamp duty & registration');
-  }
-
-  if (textLower.includes('probation') || textLower.includes('lock-in') || textLower.includes('term of') || textLower.includes('period of 11 months') || textLower.includes('commencing from') || textLower.includes('परिवीक्षा')) {
-    return normalizeClauseType('term & termination');
+    return 'amendment & supersession';
   }
 
   if (
-    textLower.includes('monthly rent') ||
-    textLower.includes('monthly salary') ||
-    textLower.includes('fixed monthly') ||
-    textLower.includes('principal amount') ||
-    textLower.includes('advance a sum') ||
-    textLower.includes('compensation') ||
-    textLower.includes('ctc') ||
-    textLower.includes('वेतन') ||
-    textLower.includes('प्रति माह') ||
-    textLower.includes('माह')
+    textLower.includes('annual income') ||
+    textLower.includes('family income') ||
+    textLower.includes('income limit') ||
+    textLower.includes('income ceiling') ||
+    textLower.includes('age limit') ||
+    textLower.includes('aged between') ||
+    textLower.includes('years of age')
   ) {
-    return normalizeClauseType('payment/consideration');
+    return 'income & age limits';
+  }
+
+  if (
+    textLower.includes('not eligible') ||
+    textLower.includes('ineligible') ||
+    textLower.includes('excluded') ||
+    textLower.includes('disqualification') ||
+    textLower.includes('shall not apply to')
+  ) {
+    return 'exclusions & disqualifications';
+  }
+
+  if (
+    textLower.includes('eligible') ||
+    textLower.includes('eligibility') ||
+    textLower.includes('beneficiary') ||
+    textLower.includes('beneficiaries')
+  ) {
+    return 'eligibility criteria';
+  }
+
+  if (
+    textLower.includes('financial assistance') ||
+    textLower.includes('subsidy') ||
+    textLower.includes('grant') ||
+    textLower.includes('scholarship') ||
+    textLower.includes('pension') ||
+    textLower.includes('stipend') ||
+    textLower.includes('per month') ||
+    textLower.includes('benefit amount')
+  ) {
+    return 'benefits & financial assistance';
+  }
+
+  if (
+    textLower.includes('required documents') ||
+    textLower.includes('documents required') ||
+    textLower.includes('aadhaar') ||
+    textLower.includes('income certificate') ||
+    textLower.includes('ration card') ||
+    textLower.includes('bank passbook')
+  ) {
+    return 'required documents';
+  }
+
+  if (
+    textLower.includes('how to apply') ||
+    textLower.includes('online portal') ||
+    textLower.includes('application form') ||
+    textLower.includes('submit application') ||
+    textLower.includes('apply online')
+  ) {
+    return 'application process';
+  }
+
+  if (
+    textLower.includes('last date') ||
+    textLower.includes('deadline') ||
+    textLower.includes('on or before') ||
+    textLower.includes('cut-off') ||
+    textLower.includes('effective from') ||
+    textLower.includes('valid up to')
+  ) {
+    return 'deadlines & validity';
+  }
+
+  if (
+    textLower.includes('grievance') ||
+    textLower.includes('nodal officer') ||
+    textLower.includes('helpline') ||
+    textLower.includes('complaint')
+  ) {
+    return 'grievance & nodal authority';
+  }
+
+  if (
+    textLower.includes('verification') ||
+    textLower.includes('disbursement') ||
+    textLower.includes('direct benefit transfer') ||
+    textLower.includes('implementing agency')
+  ) {
+    return 'implementation & verification';
+  }
+
+  if (
+    textLower.includes('circular no') ||
+    textLower.includes('government order') ||
+    textLower.includes('office memorandum') ||
+    textLower.includes('objective of the scheme') ||
+    textLower.includes('ministry of') ||
+    textLower.includes('department of')
+  ) {
+    return 'scheme overview & objective';
   }
 
   return 'other';
@@ -2067,36 +2393,32 @@ export function synchronizeClauseRiskAndConsequence(clause: SimplifiedClause): S
   const lowerText = clause.original_text.toLowerCase();
   const lowerTitle = clause.title.toLowerCase();
 
-  // High Risk triggers
+  // High Attention / Strict Condition triggers for public schemes
   if (
     lowerCons.includes('high risk') ||
-    lowerCons.includes('broad indemnity') ||
-    lowerCons.includes('liquidated damages') ||
-    lowerCons.includes('forfeited') ||
-    lowerCons.includes('service bond') ||
+    lowerCons.includes('important condition') ||
+    clause.clause_type === 'exclusions & disqualifications' ||
+    lowerText.includes('disqualified') ||
+    lowerText.includes('not eligible') ||
+    lowerText.includes('ineligible') ||
+    lowerText.includes('shall be rejected') ||
     lowerText.includes('forfeited') ||
-    lowerText.includes('indemnify') ||
-    lowerText.includes('indemnification') ||
-    lowerTitle.includes('indemnity') ||
-    lowerText.includes('non-compete') ||
-    lowerText.includes('3,00,000') ||
-    lowerText.includes('remainder of the lock-in') ||
-    lowerText.includes('बॉन्ड') ||
-    lowerText.includes('बॉण्ड') ||
-    lowerText.includes('15,00,000') ||
-    lowerText.includes('15,000') ||
-    lowerText.includes('प्रशिक्षण लागत') ||
-    lowerText.includes('पुनर्भुगतान')
+    lowerText.includes('canceled') ||
+    lowerText.includes('cancelled') ||
+    lowerTitle.includes('exclusion') ||
+    lowerTitle.includes('disqualification')
   ) {
     riskLevel = 'high';
     iconName = 'AlertOctagon';
   } else if (
     lowerCons.includes('watch out') ||
-    lowerText.includes('lock-in') ||
-    lowerText.includes('notice period') ||
-    lowerText.includes('नोटिस अवधि') ||
-    lowerText.includes('परिवीक्षा') ||
-    clause.clause_type === 'security deposit'
+    lowerText.includes('deadline') ||
+    lowerText.includes('last date') ||
+    lowerText.includes('income limit') ||
+    lowerText.includes('age limit') ||
+    clause.clause_type === 'deadlines & validity' ||
+    clause.clause_type === 'income & age limits' ||
+    clause.clause_type === 'required documents'
   ) {
     if (riskLevel !== 'high') {
       riskLevel = 'watch_out';
@@ -2104,21 +2426,21 @@ export function synchronizeClauseRiskAndConsequence(clause: SimplifiedClause): S
     }
   }
 
-  // Formatting & Prefix enforcement
+  // Clean simple prefix enforcement
   if (riskLevel === 'high') {
     iconName = 'AlertOctagon';
-    if (!consequence.toLowerCase().startsWith('high risk')) {
-      consequence = `High Risk: ${consequence.replace(/^(safe clause|low risk|watch out|high risk):\s*/i, '')}`;
+    if (!lowerCons.startsWith('important:') && !lowerCons.startsWith('high risk')) {
+      consequence = `Important: ${consequence.replace(/^(safe clause|low risk|watch out|high risk|important|check carefully|standard info):\s*/i, '')}`;
     }
   } else if (riskLevel === 'watch_out') {
     iconName = 'Clock';
-    if (!consequence.toLowerCase().startsWith('watch out')) {
-      consequence = `Watch Out: ${consequence.replace(/^(safe clause|low risk|watch out|high risk):\s*/i, '')}`;
+    if (!lowerCons.startsWith('watch out') && !lowerCons.startsWith('check carefully')) {
+      consequence = `Check Carefully: ${consequence.replace(/^(safe clause|low risk|watch out|high risk|important|check carefully|standard info):\s*/i, '')}`;
     }
   } else {
     iconName = 'CheckCircle';
-    if (!consequence.toLowerCase().startsWith('low risk') && !consequence.toLowerCase().startsWith('safe clause')) {
-      consequence = `Low Risk: ${consequence.replace(/^(safe clause|low risk|watch out|high risk):\s*/i, '')}`;
+    if (!lowerCons.startsWith('standard info') && !lowerCons.startsWith('low risk') && !lowerCons.startsWith('safe clause')) {
+      consequence = `Standard Info: ${consequence.replace(/^(safe clause|low risk|watch out|high risk|important|check carefully|standard info):\s*/i, '')}`;
     }
   }
 
@@ -2130,13 +2452,13 @@ export function synchronizeClauseRiskAndConsequence(clause: SimplifiedClause): S
   };
 }
 
-// Stage 2: Async Structural Clause Chunking & Taxonomy Typing
+// Stage 2: Async Structural Section Chunking & Taxonomy Typing
 export async function chunkDocumentTextIntoClausesAsync(text: string): Promise<SimplifiedClause[]> {
   const rawClauses = chunkDocumentTextIntoClauses(text);
   return rawClauses;
 }
 
-// Stage 3: Real AI Per-Clause Risk Reasoning & Consequence Severity Grounding
+// Stage 3: Citizen Condition & Priority Tagging
 export async function applyRiskTaggingAndGroundingAsync(
   clauses: SimplifiedClause[],
   category: string,
@@ -2149,32 +2471,34 @@ export async function applyRiskTaggingAndGroundingAsync(
     const clausePayload = baseClauses.map((c) => ({
       id: c.id,
       title: c.title,
+      page_number: c.page_number,
+      section_reference: c.section_reference,
       text: c.original_text.slice(0, 400),
     }));
 
     const messages = [
       {
         role: 'system',
-        content: `You are a Senior Legal Risk Evaluator. Analyze each clause for legal risk exposure under commercial law.
-Risk Tiers — exactly three tiers:
-1. "low" (Low Risk): Standard, boilerplate, or purely descriptive clauses with no monetary penalty, ambiguity, or unusual terms (e.g. party identification, definitions, stated principal amount).
-2. "medium" (Watch Out): Real but bounded financial or legal exposure, minor ambiguity (e.g. missing refund timeframe), terms stricter than typical, or provisions worth double-checking before signing.
-3. "high" (High Risk): Significant, uncapped, or unusual exposure: large penalty amounts, severe non-compete/bond terms, or one-sided termination/indemnity provisions.
+        content: `You are GovScheme Diff AI, a plain-language helper explaining Indian government scheme circulars to everyday citizens.
+Review each section and assign an attention level:
+1. "low" (Standard Info): General scheme background, objectives, or direct benefit descriptions.
+2. "medium" (Check Carefully): Income limits, age limits, required certificates/documents, application steps, or submission dates citizens must verify.
+3. "high" (Important Restriction): Strict disqualifications, exclusions, mandatory cutoffs, or reasons an application can be rejected.
 
 Respond strictly in JSON with an object containing key "clause_risks", which is an array of objects with:
-- "id": string (matching the input clause id)
+- "id": string (matching the input section id)
 - "risk_level": "high" | "medium" | "low"
-- "consequence": string (one clear sentence explaining the practical financial or legal consequence)
+- "consequence": string (one short everyday-English sentence grounded strictly in the circular text; never invent amounts, dates, or rules)
 - "icon_name": "AlertOctagon" | "Clock" | "CheckCircle"`
       },
       {
         role: 'user',
-        content: `Document Category: ${category}\nClauses to analyze:\n${JSON.stringify(clausePayload, null, 2)}`
+        content: `Circular Category: ${category}\nSections to review:\n${JSON.stringify(clausePayload, null, 2)}`
       }
     ];
 
     const rawResponse = await callAiChatCompletion(messages, true, cancelSignal);
-    if (rawResponse) {
+    if (rawResponse && !rawResponse.startsWith('RATE_LIMIT_EXHAUSTED')) {
       const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
@@ -2210,7 +2534,7 @@ Respond strictly in JSON with an object containing key "clause_risks", which is 
       }
     }
   } catch (err) {
-    console.warn('AI Risk Tagging reasoning fallback to rule engine:', err);
+    console.warn('Circular priority tagging fallback to rule engine:', err);
   }
 
   return baseClauses;
@@ -2218,7 +2542,7 @@ Respond strictly in JSON with an object containing key "clause_risks", which is 
 
 export function applyRiskTaggingAndGrounding(
   clauses: SimplifiedClause[],
-  category: DocumentCategory
+  _category: DocumentCategory
 ): SimplifiedClause[] {
   return clauses.map((clause) => {
     const textLower = clause.original_text.toLowerCase();
@@ -2227,37 +2551,27 @@ export function applyRiskTaggingAndGrounding(
     let iconName = 'CheckCircle';
     let rawConsequence = '';
 
-    // High Risk Triggers
     if (
+      clause.clause_type === 'exclusions & disqualifications' ||
+      textLower.includes('disqualified') ||
+      textLower.includes('not eligible') ||
+      textLower.includes('ineligible') ||
+      textLower.includes('shall be rejected') ||
       textLower.includes('forfeited') ||
-      textLower.includes('early termination penalty') ||
-      textLower.includes('remainder of the lock-in') ||
-      textLower.includes('non-compete') ||
-      textLower.includes('service bond') ||
-      textLower.includes('liquidated damages') ||
-      textLower.includes('3,00,000') ||
-      textLower.includes('indemnify') ||
-      textLower.includes('indemnification') ||
-      titleLower.includes('indemnity') ||
-      textLower.includes('बॉन्ड') ||
-      textLower.includes('बॉण्ड') ||
-      textLower.includes('प्रशिक्षण लागत') ||
-      textLower.includes('पुनर्भुगतान')
+      textLower.includes('excluded') ||
+      titleLower.includes('exclusion') ||
+      titleLower.includes('disqualification')
     ) {
       riskLevel = 'high';
       iconName = 'AlertOctagon';
-    }
-    // Watch Out Triggers
-    else if (
-      textLower.includes('notice period') ||
-      textLower.includes('lock-in') ||
-      textLower.includes('escalation') ||
-      textLower.includes('late penalty') ||
-      textLower.includes('probation') ||
-      textLower.includes('परिवीक्षा') ||
-      textLower.includes('नोटिस अवधि') ||
-      clause.clause_type === 'security deposit' ||
-      textLower.includes('security deposit')
+    } else if (
+      textLower.includes('deadline') ||
+      textLower.includes('last date') ||
+      textLower.includes('income limit') ||
+      textLower.includes('age limit') ||
+      clause.clause_type === 'deadlines & validity' ||
+      clause.clause_type === 'income & age limits' ||
+      clause.clause_type === 'required documents'
     ) {
       riskLevel = 'watch_out';
       iconName = 'Clock';
@@ -2266,45 +2580,24 @@ export function applyRiskTaggingAndGrounding(
       iconName = 'CheckCircle';
     }
 
-    // Security Deposit Ambiguity Check (preserve high risk if already flagged for forfeiture/penalty)
-    if ((clause.clause_type === 'security deposit' || textLower.includes('security deposit')) && riskLevel !== 'high') {
-      const hasSpecificDays = /\b(\d+)\s*(day|days|month|months|week|weeks)\b/i.test(textLower);
-      if (!hasSpecificDays || textLower.includes('upon vacating') || textLower.includes('no specific refund deadline')) {
-        riskLevel = 'watch_out';
-        iconName = 'Clock';
-        rawConsequence = `Watch Out: Deposit refund upon vacating lacks a specific day timeframe/deadline, which could cause delay.`;
-      } else {
-        rawConsequence = `Low Risk: Standard interest-free security deposit refundable under specified terms.`;
-      }
+    if ((clause.clause_type === 'deadlines & validity' || clause.clause_type === 'income & age limits') && riskLevel !== 'high') {
+      const hasSpecificDateOrAmount = /\b(\d+)\s*(day|days|month|months|year|years)\b|\b(rs\.?|₹)\s*[\d,]+/i.test(textLower);
+      rawConsequence = hasSpecificDateOrAmount
+        ? `Check Carefully: Specific deadline or eligibility limit applies in this section.`
+        : `Check Carefully: Verify exact dates or limits in this circular section.`;
     }
 
     if (!rawConsequence) {
       if (riskLevel === 'high') {
-        if (textLower.includes('indemnify') || titleLower.includes('indemnity') || textLower.includes('क्षतिपूर्ति')) {
-          rawConsequence = `High Risk: Broad indemnity clause exposing party to potential loss or claim liabilities.`;
-        } else if (textLower.includes('non-compete')) {
-          rawConsequence = `High Risk: Post-employment non-compete restriction limiting future employment options.`;
-        } else if (textLower.includes('service bond') || textLower.includes('liquidated damages') || textLower.includes('3,00,000') || textLower.includes('बॉन्ड') || textLower.includes('बॉण्ड') || textLower.includes('प्रशिक्षण लागत') || textLower.includes('15,000')) {
-          rawConsequence = `High Risk: Substantial financial bond/liquidated damages penalty for early departure.`;
-        } else if (textLower.includes('forfeited') || textLower.includes('remainder of the lock-in')) {
-          rawConsequence = `High Risk: Early exit requires paying full rent for remaining lock-in period as penalty.`;
-        } else {
-          rawConsequence = `High Risk: Significant legal or financial exposure identified in this clause.`;
-        }
+        rawConsequence = `Important: This section lists rules that can make a person ineligible or cause rejection.`;
       } else if (riskLevel === 'watch_out') {
-        if (textLower.includes('lock-in')) {
-          rawConsequence = `Watch Out: Mandatory lock-in period restricts early exit without financial penalty.`;
-        } else if (textLower.includes('notice period') || textLower.includes('नोटिस अवधि')) {
-          rawConsequence = `Watch Out: Requires advance written notice prior to termination.`;
-        } else if (textLower.includes('escalation')) {
-          rawConsequence = `Watch Out: Rent escalates annually by specified percentage.`;
-        } else if (textLower.includes('probation') || textLower.includes('परिवीक्षा')) {
-          rawConsequence = `Watch Out: Probationary period allows termination with short 7-day notice.`;
+        if (clause.clause_type === 'required documents') {
+          rawConsequence = `Check Carefully: You must attach the listed certificates and documents when applying.`;
         } else {
-          rawConsequence = `Watch Out: Term contains parameters worth double-checking before signing.`;
+          rawConsequence = `Check Carefully: Verify the dates, limits, or steps in this section before applying.`;
         }
       } else {
-        rawConsequence = `Low Risk: Standard boilerplate or descriptive clause with no unusual financial penalty.`;
+        rawConsequence = `Standard Info: Explains scheme details and support covered in this section.`;
       }
     }
 
@@ -2323,19 +2616,19 @@ export function applyRiskTaggingAndGrounding(
 // Helper Functions for Titling & Structural Explanation Validation
 function extractDocumentTitle(text: string, category: DocumentCategory): string {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-  for (const line of lines.slice(0, 10)) {
-    if (/^(CONFIDENTIAL & PRIVILEGED|CONTRACT REF:|Page \d+ of \d+|\d+\s+of\s+\d+$)/i.test(line)) {
+  for (const line of lines.slice(0, 12)) {
+    if (/^(---\s*Page\s+\d+\s*---|\[Page\s+\d+\]|CONFIDENTIAL & PRIVILEGED|CONTRACT REF:|Page \d+ of \d+|\d+\s+of\s+\d+$)/i.test(line)) {
       continue;
     }
-    const cleanLine = line.replace(/^(DOCUMENT TITLE|TITLE|AGREEMENT|CONTRACT):\s*/i, '').trim();
-    if (cleanLine.length >= 5 && cleanLine.length <= 80 && !cleanLine.endsWith(':')) {
+    const cleanLine = line.replace(/^(DOCUMENT TITLE|TITLE|SUBJECT|SUB):\s*/i, '').trim();
+    if (cleanLine.length >= 5 && cleanLine.length <= 100 && !cleanLine.endsWith(':')) {
       return cleanLine;
     }
   }
   if (category && category !== 'other') {
     return category.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   }
-  return 'Legal Agreement';
+  return 'Government Scheme Circular';
 }
 
 function cleanClauseTitle(rawTitle: string, index: number): string {
@@ -2343,14 +2636,16 @@ function cleanClauseTitle(rawTitle: string, index: number): string {
     .replace(/^ARTICLE\s+\d+:\s*\d*\.?\s*/i, '')
     .replace(/^SECTION\s+\d+:\s*\d*\.?\s*/i, '')
     .replace(/^CLAUSE\s+\d+:\s*\d*\.?\s*/i, '')
+    .replace(/^PARA(?:GRAPH)?\s+\d+[:.\-]?\s*\d*\.?\s*/i, '')
     .replace(/^[0-9.#\s-]+/, '')
+    .replace(/:$/, '')
     .trim();
 
   if (cleaned.length === 0) {
     cleaned = rawTitle.trim();
   }
 
-  return cleaned.length > 0 && cleaned.length < 90 ? cleaned : `Clause ${index}`;
+  return cleaned.length > 0 && cleaned.length < 90 ? cleaned : `Section ${index}`;
 }
 
 function getClauseTypeLabel(clauseType: ClauseType): string {
@@ -2454,133 +2749,348 @@ export function generateVerySimpleExplanation(text: string, clauseType: ClauseTy
   return null;
 }
 
-export function generateHighQualityDomainExplanation(c: SimplifiedClause, language: string = 'en'): { simple: string; verySimple: string } {
-  const isKannada = language === 'kn' || /[\u0C80-\u0CFF]/.test(c.original_text || '') || /[\u0C80-\u0CFF]/.test(c.title || '');
-  const type = (c.clause_type || '').toLowerCase();
-  const title = (c.title || '').toLowerCase();
+export function formatCircularCitation(clause?: Partial<SimplifiedClause> | null): string {
+  if (!clause) return '';
+  const parts: string[] = [];
+  if (typeof clause.page_number === 'number' && clause.page_number > 0) {
+    parts.push(`Page ${clause.page_number}`);
+  }
+  const ref = clause.section_reference || (clause.clause_number ? `Section ${clause.clause_number}` : '');
+  if (ref) {
+    parts.push(ref);
+  }
+  return parts.length > 0 ? `(${parts.join(', ')})` : '';
+}
 
-  let simple = '';
-  let verySimple = '';
+export function enforceThreePointCitizenAnswer(
+  rawText: string,
+  options?: {
+    citation?: string;
+    isMissingInfo?: boolean;
+    fallbackPoints?: [string, string, string];
+  }
+): string {
+  const MISSING_PHRASE = 'This information is not mentioned in the uploaded circular.';
+  const cleanLine = (s: string): string =>
+    s
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/^\s*(?:\d+[\.\)]\s*|[-•*]\s*)/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
 
-  if (isKannada) {
-    if (type.includes('notice') || title.includes('notice')) {
-      simple = 'ಒಪ್ಪಂದವನ್ನು ಮುಕ್ತಾಯಗೊಳಿಸುವ ಮೊದಲು ನಿಗದಿತ ಅವಧಿಯ ಲಿಖಿತ ಮುಂಗಡ ಸೂಚನೆ ನೀಡಬೇಕು. ಅಗತ್ಯ ಸೂಚನೆ ನೀಡದಿದ್ದರೆ ಆರ್ಥಿಕ ನಷ್ಟ ಅಥವಾ ದಂಡ ವಿಧಿಸಬಹುದು.';
-      verySimple = 'ಒಪ್ಪಂದವನ್ನು ಮುಕ್ತಾಯಗೊಳಿಸುವ ಮೊದಲು ಲಿಖಿತ ಮುಂಗಡ ಸೂಚನೆ ನೀಡಬೇಕು.';
-    } else if (type.includes('deposit') || title.includes('deposit')) {
-      simple = 'ಭದ್ರತಾ ಠೇವಣಿ ಪಾವತಿ, ಆಸ್ತಿ ಅಥವಾ ಸೇವೆಯನ್ನು ಬಿಡುವಾಗ ಹಣ ಮರುಪಾವತಿ ಮತ್ತು ಕಡಿತಗಳ ನಿಯಮಗಳನ್ನು ಇದು ವಿವರಿಸುತ್ತದೆ.';
-      verySimple = 'ಭದ್ರತಾ ಠೇವಣಿ ಮರುಪಾವತಿ ಮತ್ತು ಕಡಿತದ ನಿಯಮಗಳನ್ನು ತಿಳಿಸುತ್ತದೆ.';
-    } else if (type.includes('rent') || title.includes('rent') || type.includes('compensation') || title.includes('compensation')) {
-      simple = 'ತಿಂಗಳ ಪಾವತಿ ಮೊತ್ತ, ಪಾವತಿಯ ಕೊನೆಯ ದಿನಾಂಕ ಮತ್ತು ತಡವಾದರೆ ವಿಧಿಸುವ ಶುಲ್ಕ ಅಥವಾ ದಂಡವನ್ನು ವಿವರಿಸುತ್ತದೆ.';
-      verySimple = 'ತಿಂಗಳ ಪಾವತಿ ಮೊತ್ತ ಮತ್ತು ಪಾವತಿ ದಿನಾಂಕಗಳನ್ನು ತಿಳಿಸುತ್ತದೆ.';
-    } else if (type.includes('probation') || title.includes('probation')) {
-      simple = 'ಆರಂಭಿಕ ಕೆಲಸದ ಪರಿಶೀಲನಾ ಅವಧಿಯನ್ನು ಇದು ನಿಗದಿಪಡಿಸುತ್ತದೆ. ಈ ಅವಧಿಯಲ್ಲಿ ಕೆಲಸದ ಕಾರ್ಯಕ್ಷಮತೆಯನ್ನು ಮೌಲ್ಯಮಾಪನ ಮಾಡಲಾಗುತ್ತದೆ ಮತ್ತು ಕಡಿಮೆ ಮುಂಗಡ ಸೂಚನೆಯೊಂದಿಗೆ ಒಪ್ಪಂದವನ್ನು ಮುಕ್ತಾಯಗೊಳಿಸಬಹುದು.';
-      verySimple = 'ಆರಂಭಿಕ ಮೌಲ್ಯಮಾಪನ ಮತ್ತು ಪರಿಶೀಲನಾ ಅವಧಿಯನ್ನು ನಿಗದಿಪಡಿಸುತ್ತದೆ.';
-    } else if (type.includes('compete') || title.includes('non-compete')) {
-      simple = 'ಒಪ್ಪಂದದ ಅವಧಿಯಲ್ಲಿ ಅಥವಾ ನಂತರ ಸ್ಪರ್ಧಿ ಸಂಸ್ಥೆಗಳಲ್ಲಿ ಕೆಲಸ ಮಾಡುವುದನ್ನು ಅಥವಾ ಗ್ರಾಹಕರು/ಸಿಬ್ಬಂದಿಯನ್ನು ಸೆಳೆಯುವುದನ್ನು ನಿರ್ಬಂಧಿಸುತ್ತದೆ.';
-      verySimple = 'ಸ್ಪರ್ಧಿ ಸಂಸ್ಥೆಗಳಲ್ಲಿ ಕೆಲಸ ಮಾಡುವುದನ್ನು ನಿರ್ಬಂಧಿಸುತ್ತದೆ.';
-    } else if (type.includes('bond') || type.includes('penalty') || title.includes('bond') || title.includes('penalty')) {
-      simple = 'ಕನಿಷ್ಠ ಸೇವಾ ಅವಧಿಯನ್ನು ನಿಗದಿಪಡಿಸುತ್ತದೆ. ಅವಧಿಗೂ ಮುನ್ನ ಕೆಲಸ ಅಥವಾ ಒಪ್ಪಂದವನ್ನು ಬಿಟ್ಟರೆ ಪರಿಹಾರ ಮೊತ್ತ ಅಥವಾ ದಂಡ ವಿಧಿಸುವ ನಿಯಮವನ್ನು ವಿವರಿಸುತ್ತದೆ.';
-      verySimple = 'ಕನಿಷ್ಠ ಸೇವಾ ಅವಧಿ ಮತ್ತು ಅವಧಿಗೂ ಮುನ್ನ ಮುಕ್ತಾಯಗೊಳಿಸಿದರೆ ವಿಧಿಸುವ ದಂಡವನ್ನು ತಿಳಿಸುತ್ತದೆ.';
-    } else if (type.includes('confidential') || title.includes('confidential')) {
-      simple = 'ಕಂಪನಿಯ ಸೂಕ್ಷ್ಮ ಮಾಹಿತಿ, ವ್ಯಾಪಾರ ರಹಸ್ಯಗಳು ಮತ್ತು ಗೌಪ್ಯ ಮಾಹಿತಿಯನ್ನು ರಕ್ಷಿಸಬೇಕು ಹಾಗೂ ಮೂರನೇ ವ್ಯಕ್ತಿಗಳೊಂದಿಗೆ ಹಂಚಿಕೊಳ್ಳಬಾರದು ಎಂದು ಇದು ಸೂಚಿಸುತ್ತದೆ.';
-      verySimple = 'ಗೌಪ್ಯ ಮಾಹಿತಿಯನ್ನು ಸುರಕ್ಷಿತವಾಗಿಡಲು ಸೂಚಿಸುತ್ತದೆ.';
-    } else if (type.includes('dispute') || type.includes('law') || title.includes('dispute') || title.includes('jurisdiction')) {
-      simple = 'ಒಪ್ಪಂದಕ್ಕೆ ಸಂಬಂಧಿಸಿದ ಕಾನೂನು ವಿವಾದಗಳನ್ನು ಬಗೆಹರಿಸುವ ವಿಧಾನ, ಅನ್ವಯಿಸುವ ಕಾನೂನು ಮತ್ತು ನ್ಯಾಯಾಲಯದ ವ್ಯಾಪ್ತಿಯನ್ನು ನಿಗದಿಪಡಿಸುತ್ತದೆ.';
-      verySimple = 'ವಿವಾದ ಪರಿಹಾರ ವಿಧಾನ ಮತ್ತು ಅನ್ವಯಿಸುವ ನ್ಯಾಯವ್ಯಾಪ್ತಿಯನ್ನು ತಿಳಿಸುತ್ತದೆ.';
-    } else if (type.includes('maintenance') || title.includes('maintenance') || title.includes('repair')) {
-      simple = 'ಆಸ್ತಿ ಅಥವಾ ಮೂಲಸೌಕರ್ಯದ ನಿರ್ವಹಣೆ, ದುರಸ್ತಿ ಮತ್ತು ಅದಕ್ಕೆ ಸಂಬಂಧಿಸಿದ ವೆಚ್ಚಗಳನ್ನು ಯಾರು ಭರಿಸಬೇಕು ಎಂಬುದನ್ನು ಸ್ಪಷ್ಟಪಡಿಸುತ್ತದೆ.';
-      verySimple = 'ನಿರ್ವಹಣೆ ಮತ್ತು ದುರಸ್ತಿ ವೆಚ್ಚಗಳ ಹಂಚಿಕೆಯನ್ನು ತಿಳಿಸುತ್ತದೆ.';
-    } else if (type.includes('indemnity') || title.includes('indemnity') || type.includes('liability')) {
-      simple = 'ಮೂರನೇ ವ್ಯಕ್ತಿಗಳ ಹಕ್ಕುಹೊಂದಿಕೆಗಳು, ಕಾರ್ಯಾಚರಣೆಯ ನಷ್ಟಗಳು ಅಥವಾ ಕಾನೂನು ಪ್ರಕರಣಗಳಿಂದ ಉಂಟಾಗುವ ಆರ್ಥಿಕ ಮತ್ತು ಕಾನೂನು ಹೊಣೆಗಾರಿಕೆಯನ್ನು ಹಂಚುತ್ತದೆ.';
-      verySimple = 'ಕಾನೂನು ಹಕ್ಕುಹೊಂದಿಕೆಗಳು ಮತ್ತು ನಷ್ಟಗಳ ವಿರುದ್ಧ ಆರ್ಥಿಕ ರಕ್ಷಣೆಯನ್ನು ಒದಗಿಸುತ್ತದೆ.';
-    } else {
-      const cleanConsequence = c.one_line_consequence ? cleanExplanationPrefix(c.one_line_consequence) : '';
-      if (cleanConsequence && cleanConsequence.length >= 15) {
-        simple = cleanConsequence;
-        verySimple = cleanConsequence;
-      } else {
-        simple = `ಈ ವಿಧಿಯು ${c.title || 'ಒಪ್ಪಂದದ ಷರತ್ತು'}ಗೆ ಸಂಬಂಧಿಸಿದ ಮುಖ್ಯ ಹಕ್ಕುಗಳು, ಜವಾಬ್ದಾರಿಗಳು ಮತ್ತು ಕಾನೂನು ಕರ್ತವ್ಯಗಳನ್ನು ವಿವರಿಸುತ್ತದೆ.`;
-        verySimple = `ಈ ವಿಧಿಯು ${c.title || 'ಒಪ್ಪಂದದ ಷರತ್ತು'}ಗೆ ಸಂಬಂಧಿಸಿದ ಮುಖ್ಯ ಕರ್ತವ್ಯಗಳನ್ನು ತಿಳಿಸುತ್ತದೆ。`;
-      }
-    }
+  const text = (rawText || '').replace(/\r\n/g, '\n').trim();
+  let items: string[] = [];
+
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith('|---'));
+
+  const numberedLines = lines.filter((l) => /^\d+[\.\)]\s+/.test(l));
+  if (numberedLines.length >= 2) {
+    items = numberedLines.map(cleanLine).filter(Boolean);
   } else {
-    // English
-    if (type.includes('notice') || title.includes('notice')) {
-      simple = 'Mandates advance written notice prior to terminating the agreement. Failure to provide required notice may result in financial forfeiture or payment in lieu.';
-      verySimple = 'Requires advance written notice before agreement termination.';
-    } else if (type.includes('deposit') || title.includes('deposit')) {
-      simple = 'Outlines security deposit payment requirements, conditions for full refund, and authorized deductions upon contract conclusion.';
-      verySimple = 'Defines security deposit refund and deduction rules.';
-    } else if (type.includes('rent') || title.includes('rent') || type.includes('compensation') || title.includes('compensation')) {
-      simple = 'Sets out regular payment amounts, schedule of due dates, and penalties or interest applicable to delayed payments.';
-      verySimple = 'Specifies recurring payment amounts and due dates.';
-    } else if (type.includes('probation') || title.includes('probation')) {
-      simple = 'Establishes an initial trial period to evaluate performance, during which either party may end the relationship with reduced notice.';
-      verySimple = 'Sets initial evaluation period and notice terms.';
-    } else if (type.includes('compete') || title.includes('non-compete')) {
-      simple = 'Restricts engaging with competing enterprises or soliciting clients or staff during the term and for a specified post-termination period.';
-      verySimple = 'Restricts joining competing businesses or soliciting clients.';
-    } else if (type.includes('bond') || type.includes('penalty') || title.includes('bond') || title.includes('penalty')) {
-      simple = 'Enforces a required minimum duration of service and specifies financial compensation or liquidated damages if exited prematurely.';
-      verySimple = 'Specifies minimum service commitment and early exit penalties.';
-    } else if (type.includes('confidential') || title.includes('confidential')) {
-      simple = 'Requires strict non-disclosure of proprietary trade secrets, customer records, and operational data during and following contract termination.';
-      verySimple = 'Mandates protection of confidential and proprietary information.';
-    } else if (type.includes('dispute') || type.includes('law') || title.includes('dispute') || title.includes('jurisdiction')) {
-      simple = 'Establishes governing legal frameworks, designated court jurisdiction, and binding dispute resolution or arbitration mechanisms.';
-      verySimple = 'Defines governing law and dispute resolution venue.';
-    } else if (type.includes('maintenance') || title.includes('maintenance') || title.includes('repair')) {
-      simple = 'Assigns operational responsibilities and expense sharing between parties for upkeep, routine maintenance, and structural repairs.';
-      verySimple = 'Allocates maintenance and repair duties between parties.';
-    } else if (type.includes('indemnity') || title.includes('indemnity') || type.includes('liability')) {
-      simple = 'Allocates financial responsibility and legal defense obligations in the event of third-party claims, property damage, or operational losses.';
-      verySimple = 'Defines liability limits and indemnity protection obligations.';
+    const bulletLines = lines.filter((l) => /^[-•*]\s+/.test(l));
+    if (bulletLines.length >= 2) {
+      items = bulletLines.map(cleanLine).filter(Boolean);
     } else {
-      const cleanConsequence = c.one_line_consequence ? cleanExplanationPrefix(c.one_line_consequence) : '';
-      if (cleanConsequence && cleanConsequence.length >= 15) {
-        simple = cleanConsequence;
-        verySimple = cleanConsequence;
-      } else {
-        simple = `Governs rights, operational requirements, and binding obligations relating to ${c.title || 'this contractual clause'}.`;
-        verySimple = `Specifies core requirements and duties for ${c.title || 'this clause'}.`;
-      }
+      const normalized = cleanLine(text.replace(/\n+/g, ' '));
+      const sentences = normalized
+        .split(/(?<=[.!?])\s+(?=[A-Z0-9"'])/)
+        .map(cleanLine)
+        .filter(Boolean);
+      items = sentences.length > 0 ? sentences : (normalized ? [normalized] : []);
     }
   }
 
-  return { simple, verySimple };
+  items = items.filter((item) => item.length >= 4);
+
+  if (options?.isMissingInfo && !items.some((i) => i.toLowerCase().includes('not mentioned in the uploaded circular'))) {
+    items.unshift(MISSING_PHRASE);
+  }
+
+  if (items.length > 3) {
+    const first = items[0];
+    const second = items[1];
+    const remaining = items.slice(2).join(' ').trim();
+    items = [first, second, remaining.length <= 220 ? remaining : `${remaining.slice(0, 219).trim()}`];
+  }
+
+  const defaults: [string, string, string] = options?.fallbackPoints || [
+    MISSING_PHRASE,
+    options?.citation
+      ? `Check the uploaded circular at ${options.citation.replace(/^\(|\)$/g, '')}.`
+      : 'Check the uploaded circular sections for more details.',
+    'Confirm complete details on the official scheme portal or citizen helpdesk.',
+  ];
+
+  while (items.length < 3) {
+    const candidate = defaults[items.length] || defaults[2];
+    if (!items.includes(candidate)) {
+      items.push(candidate);
+    } else {
+      items.push('Verify official rules on the government scheme portal before applying.');
+    }
+  }
+
+  if (options?.citation && !items.some((i) => i.includes('Page ') || i.includes('Section ') || i.includes('Circular '))) {
+    items[2] = `${items[2].replace(/[.\s]+$/, '')} ${options.citation}.`;
+  }
+
+  return items
+    .slice(0, 3)
+    .map((point, idx) => {
+      const normalized = cleanLine(point);
+      const ended = /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+      return `${idx + 1}. ${ended}`;
+    })
+    .join('\n');
 }
 
-// Stage 4: Dedicated AI Synthesis & Briefing Packet Generation
+export function generateHighQualityDomainExplanation(c: SimplifiedClause, _language: string = 'en'): { simple: string; verySimple: string } {
+  const type = (c.clause_type || '').toLowerCase();
+  const title = (c.title || 'this scheme section').trim();
+  const citation = formatCircularCitation(c);
+  const refNote = citation ? `Source: ${citation.replace(/^\(|\)$/g, '')}.` : `Check section "${title}" in the uploaded circular.`;
+
+  if (type.includes('overview') || title.toLowerCase().includes('overview') || title.toLowerCase().includes('objective')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part explains what the government scheme is and its main goal.`,
+          `It tells citizens why the circular was issued under "${title}".`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Explains the main goal of this scheme.`,
+          `Shows who the government wants to help.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  if (type.includes('exclusion') || type.includes('disqualif') || title.toLowerCase().includes('exclusion')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part lists rules that make a person unable to get this scheme benefit.`,
+          `Read every condition carefully so your form is not rejected.`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Shows who cannot apply for this scheme.`,
+          `Applying while excluded leads to rejection.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  if (type.includes('income') || type.includes('age') || title.toLowerCase().includes('income') || title.toLowerCase().includes('age')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part sets the family income limit or applicant age limit.`,
+          `Only applicants within the stated income and age range can qualify.`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Gives the income cap and age rule for this scheme.`,
+          `Check your age and income proof before you apply.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  if (type.includes('eligib') || title.toLowerCase().includes('eligib')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part explains who can apply for this government scheme.`,
+          `You must meet every listed condition to qualify for support.`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Shows who is allowed to apply.`,
+          `Make sure you meet all basic rules listed here.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  if (type.includes('benefit') || type.includes('financial') || title.toLowerCase().includes('benefit') || title.toLowerCase().includes('grant')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part describes the money, subsidy, or help the scheme provides.`,
+          `Check the exact payment schedule or conditions shown in the circular text.`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Tells you what money or help you get from the scheme.`,
+          `Check how and when the support is given.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  if (type.includes('document') || title.toLowerCase().includes('document')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part lists the ID proofs and certificates needed to apply.`,
+          `Keep valid copies ready so officials can verify your application.`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Lists the papers and ID proofs you must submit.`,
+          `Missing papers can delay or stop your application.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  if (type.includes('deadline') || type.includes('validity') || title.toLowerCase().includes('deadline')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part states the important dates, last date to apply, or validity window.`,
+          `Submit your form before the closing date so it is accepted.`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Shows the last date and timeline for this scheme.`,
+          `Apply early before the closing date passes.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  if (type.includes('application') || title.toLowerCase().includes('apply') || title.toLowerCase().includes('process')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part explains how and where to submit your scheme application.`,
+          `Follow the listed online portal or office steps carefully.`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Explains how to apply step by step.`,
+          `Use only the official portal or office listed here.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  if (type.includes('grievance') || type.includes('appeal') || title.toLowerCase().includes('grievance')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part explains where citizens can report problems or file an appeal.`,
+          `Use the listed grievance officer or helpline if your application is delayed.`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Tells you how to complain or appeal if something goes wrong.`,
+          `Keep your application receipt when contacting the helpdesk.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  if (type.includes('monitoring') || type.includes('compliance')) {
+    return {
+      simple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `This part explains how government officers check records and follow rules.`,
+          `Applicants must give true details or benefits may be stopped.`,
+          refNote,
+        ],
+      }),
+      verySimple: enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Shows how officials check and verify scheme records.`,
+          `Always give honest and accurate information.`,
+          refNote,
+        ],
+      }),
+    };
+  }
+
+  return {
+    simple: enforceThreePointCitizenAnswer('', {
+      fallbackPoints: [
+        `This part covers scheme details under "${title}".`,
+        `Read the original circular text to check every rule, date, or amount.`,
+        refNote,
+      ],
+    }),
+    verySimple: enforceThreePointCitizenAnswer('', {
+      fallbackPoints: [
+        `Gives details under "${title}".`,
+        `Check the full text if any rule affects your application.`,
+        refNote,
+      ],
+    }),
+  };
+}
+
+// Stage 4: Dedicated AI Synthesis & Citizen Briefing Packet Generation
 export async function synthesizeDocumentAnalysis(
   text: string,
   clauses: SimplifiedClause[],
   guard1: Guard1InputGate,
-  categoryHint?: string,
+  _categoryHint?: string,
   language: string = 'en',
   cancelSignal?: AbortSignal
 ): Promise<DocumentAnalysisResult> {
   const { demoMode } = getServerConfigStatus();
   const syncedInputClauses = clauses.map(synchronizeClauseRiskAndConsequence);
 
-  // If live API KEY is available, run live AI document synthesis
   if (!demoMode) {
-    const isKannada = language === 'kn';
-    const langInstruction = isKannada
-      ? '\nCRITICAL LANGUAGE REQUIREMENT: Write every user-facing text field entirely in natural, simple Kannada using Kannada script (ಕನ್ನಡ). Do not use Hindi or Devanagari.'
-      : '';
-
     const jsonPrompt = [
       {
         role: 'system',
-        content: `You are LegalLens AI, an accessible legal document analyzer. 
-Analyze the provided document text and extracted clauses and produce a strict JSON response conforming to schemas.ts.
-Taxonomy Document Categories: ${JSON.stringify(DOCUMENT_CATEGORY_ENUM)}
-Taxonomy Clause Types: ${JSON.stringify(CLAUSE_TYPE_ENUM)}
-Rule: Every simplified clause must have simple_explanation (plain explanation written ENTIRELY in your own words — NEVER copy or quote 8 or more consecutive words from the original clause text), very_simple_explanation (ultra simple summary), risk_level ('low'|'medium'|'high'), plain consequence string, and disclaimer field on root, checklist, and lawyer_briefing.${langInstruction}`,
+        content: `You are GovScheme Diff AI, a plain-language assistant for government scheme circulars in English ONLY.
+Analyze the provided circular text and extracted sections and produce strict JSON matching the expected schema.
+Allowed Categories: ${JSON.stringify(DOCUMENT_CATEGORY_ENUM)}
+Allowed Section Types: ${JSON.stringify(CLAUSE_TYPE_ENUM)}
+CRITICAL RULES:
+1. Use VERY SIMPLE everyday English. Avoid complicated legal, bureaucratic, and technical words.
+2. Every citizen-facing explanation ("simple_explanation" and "very_simple_explanation") MUST contain EXACTLY THREE short numbered points ("1. ...\n2. ...\n3. ...") written in your own plain words (never copy 8 or more consecutive words from the source text).
+3. Include page number and section reference in point 3 wherever available (e.g., "Source: Page 1, Section 2.").
+4. NEVER invent eligibility rules, benefits, amounts, dates, or required documents. If a detail is missing, say: "This information is not mentioned in the uploaded circular."
+5. Provide plain-language summary_simple, summary_very_simple, scheme action checklist items, citizen questions for the helpdesk officer, and disclaimer.`,
       },
       {
         role: 'user',
-        content: `Synthesize final analysis and response for this document:\nCategory: ${guard1.category}\nExtracted Clauses: ${JSON.stringify(syncedInputClauses.map(c => ({ id: c.id, clause_number: c.clause_number, clause_type: c.clause_type, title: c.title, original_text: c.original_text.slice(0, 500) })).slice(0, 15))}\n\nRaw Text:\n${text.slice(0, 6000)}`,
+        content: `Synthesize final English-only citizen analysis for this government circular:\nCategory: ${guard1.category}\nExtracted Sections: ${JSON.stringify(syncedInputClauses.map(c => ({ id: c.id, clause_number: c.clause_number, page_number: c.page_number, section_reference: c.section_reference, clause_type: c.clause_type, title: c.title, original_text: c.original_text.slice(0, 500) })).slice(0, 15))}\n\nRaw Circular Text:\n${text.slice(0, 6000)}`,
       },
     ];
 
@@ -2601,34 +3111,32 @@ Rule: Every simplified clause must have simple_explanation (plain explanation wr
             for (let idx = 0; idx < syncedInputClauses.length; idx++) {
               const baseClause = syncedInputClauses[idx];
               const aiClause = aiClausesArray.find((c: any) => c.id === baseClause.id || String(c.clause_number) === String(baseClause.clause_number)) || aiClausesArray[idx];
+              const citation = formatCircularCitation(baseClause);
 
               const rawSimple = aiClause?.simple_explanation || aiClause?.explanation || aiClause?.summary || aiClause?.description || aiClause?.text;
               const rawVerySimple = aiClause?.very_simple_explanation || aiClause?.very_simple || aiClause?.short_summary || rawSimple;
 
               let simpleExp: string | null = isValidAiExplanation(rawSimple, baseClause.original_text, baseClause.title)
-                ? cleanExplanationPrefix(rawSimple)
+                ? enforceThreePointCitizenAnswer(cleanExplanationPrefix(rawSimple) || rawSimple, { citation })
                 : null;
               let verySimpleExp: string | null = isValidAiExplanation(rawVerySimple, baseClause.original_text, baseClause.title)
-                ? cleanExplanationPrefix(rawVerySimple)
+                ? enforceThreePointCitizenAnswer(cleanExplanationPrefix(rawVerySimple) || rawVerySimple, { citation })
                 : null;
 
-              // DIRECTIVE 2: Retry-On-Structural-Failure
-              // If either explanation was rejected by structural validation, perform a targeted 1-shot retry for this specific clause
               if ((!simpleExp || !verySimpleExp) && aiClause && !cancelSignal?.aborted) {
                 try {
-                  console.warn(`[Structural Explanation Retry] Clause #${baseClause.clause_number || idx + 1} (${baseClause.title}) explanation rejected by structural validator. Retrying AI generation...`);
                   const retryPrompt = [
                     {
                       role: 'system',
-                      content: `You are LegalLens AI. Your task is to provide plain-language explanations for a legal clause.
-CRITICAL MANDATE:
-1. Do NOT restate the clause title or category name.
-2. Do NOT quote the clause text verbatim or use ellipses.
-3. Provide a genuine, clear explanation of what this clause means for the signer.${langInstruction}`
+                      content: `You are GovScheme Diff AI. Explain this circular section in very simple everyday English.
+MANDATORY RULES:
+1. Write both "simple_explanation" and "very_simple_explanation" as EXACTLY 3 short numbered points (1. ..., 2. ..., 3. ...).
+2. Do NOT copy 8+ consecutive words from the section text or use "...".
+3. Never invent rules, amounts, dates, or documents. Include reference "${citation || baseClause.title}" where relevant.`
                     },
                     {
                       role: 'user',
-                      content: `Clause Title: ${baseClause.title}\nClause Text: ${baseClause.original_text.slice(0, 1000)}\n\nRespond strictly in JSON: {"simple_explanation": "...", "very_simple_explanation": "..."}`
+                      content: `Section Title: ${baseClause.title}\nReference: ${citation || 'Uploaded circular'}\nSection Text: ${baseClause.original_text.slice(0, 1000)}\n\nRespond strictly in JSON: {"simple_explanation": "1. ...\\n2. ...\\n3. ...", "very_simple_explanation": "1. ...\\n2. ...\\n3. ..."}`
                     }
                   ];
                   const retryRes = await callAiChatCompletion(retryPrompt, true, cancelSignal);
@@ -2638,19 +3146,19 @@ CRITICAL MANDATE:
                     if (retryMatch) {
                       const retryParsed = JSON.parse(retryMatch[0]);
                       if (!simpleExp && isValidAiExplanation(retryParsed.simple_explanation, baseClause.original_text, baseClause.title)) {
-                        simpleExp = retryParsed.simple_explanation.trim();
+                        simpleExp = enforceThreePointCitizenAnswer(retryParsed.simple_explanation, { citation });
                       }
                       if (!verySimpleExp && isValidAiExplanation(retryParsed.very_simple_explanation, baseClause.original_text, baseClause.title)) {
-                        verySimpleExp = retryParsed.very_simple_explanation.trim();
+                        verySimpleExp = enforceThreePointCitizenAnswer(retryParsed.very_simple_explanation, { citation });
                       }
                     }
                   }
                 } catch (retryErr) {
-                  console.warn(`[Structural Explanation Retry Failed] for clause ${baseClause.id}:`, retryErr);
+                  console.warn(`[Explanation Retry Failed] section ${baseClause.id}:`, retryErr);
                 }
               }
 
-              const fallbackDomain = generateHighQualityDomainExplanation(baseClause, language);
+              const fallbackDomain = generateHighQualityDomainExplanation(baseClause, 'en');
               const finalSimple = simpleExp || fallbackDomain.simple;
               const finalVerySimple = verySimpleExp || fallbackDomain.verySimple;
 
@@ -2676,17 +3184,17 @@ CRITICAL MANDATE:
           }
         }
       } catch (e) {
-        console.warn('Failed to parse AI JSON result, using hardened heuristic synthesis:', e);
+        console.warn('Failed to parse AI JSON result, using grounded English circular synthesis:', e);
       }
     }
   }
 
-  // Hardened Domain Synthesis: Guarantees 100% valid plain-language explanations without meaning_error
+  // Grounded Deterministic Fallback Synthesis
   const fullySynthesizedClauses = syncedInputClauses.map((c) => {
     const validSimple = isValidAiExplanation(c.simple_explanation, c.original_text, c.title) ? cleanExplanationPrefix(c.simple_explanation!) : null;
     const validVerySimple = isValidAiExplanation(c.very_simple_explanation, c.original_text, c.title) ? cleanExplanationPrefix(c.very_simple_explanation!) : null;
 
-    const fallbackDomain = generateHighQualityDomainExplanation(c, language);
+    const fallbackDomain = generateHighQualityDomainExplanation(c, 'en');
     const finalSimple = validSimple || fallbackDomain.simple;
     const finalVerySimple = validVerySimple || fallbackDomain.verySimple;
 
@@ -2704,21 +3212,20 @@ CRITICAL MANDATE:
 
   const checklistItems = syncedInputClauses.map((c, idx) => {
     let cat: 'deadline' | 'obligation' | 'notice_period' | 'stamp_duty' | 'warning' = 'obligation';
-    if (c.clause_type.includes('notice')) cat = 'notice_period';
+    if (c.clause_type === 'deadlines & validity') cat = 'deadline';
     else if (c.risk_level === 'high') cat = 'warning';
-    else if (c.clause_type.includes('stamp')) cat = 'stamp_duty';
 
     let actionText = '';
-    if (c.clause_type === 'term & termination') {
-      actionText = `Review lease term and mandatory lock-in conditions (Clause ${idx + 1}).`;
-    } else if (c.clause_type === 'security deposit') {
-      actionText = `Confirm deposit refund timeframe upon vacating (Clause ${idx + 1}).`;
-    } else if (c.clause_type === 'notice period') {
-      actionText = `Mark required written notice lead time prior to exit (Clause ${idx + 1}).`;
+    if (c.clause_type === 'deadlines & validity') {
+      actionText = `Note application deadline or valid dates (${c.section_reference || `Section ${idx + 1}`}).`;
+    } else if (c.clause_type === 'required documents') {
+      actionText = `Gather all required ID proofs and certificates (${c.section_reference || `Section ${idx + 1}`}).`;
+    } else if (c.clause_type === 'eligibility criteria' || c.clause_type === 'income & age limits') {
+      actionText = `Check if you meet the eligibility, income, and age rules (${c.section_reference || `Section ${idx + 1}`}).`;
     } else if (c.risk_level === 'high') {
-      actionText = `Request written amendment to cap financial liability in ${c.title} (Clause ${idx + 1}).`;
+      actionText = `Check important exclusion or rejection rule in ${c.title}.`;
     } else {
-      actionText = `Verify operational terms for ${c.title} (Clause ${idx + 1}).`;
+      actionText = `Review scheme rules for ${c.title}.`;
     }
 
     return {
@@ -2731,86 +3238,60 @@ CRITICAL MANDATE:
     };
   });
 
-  const questionsForLawyer: string[] = [];
+  const citizenQuestions: string[] = [];
   for (const c of syncedInputClauses) {
     const lower = (c.original_text + ' ' + c.title).toLowerCase();
-    if (c.clause_type === 'use & restrictions' || (c.clause_type as string) === 'non-compete/non-solicitation' || lower.includes('non-compete')) {
-      questionsForLawyer.push(`Clause ${c.clause_number || c.id} (${c.title}): Is the post-employment non-compete restriction enforceable under Section 27 of the Indian Contract Act?`);
+    const refLabel = formatCircularCitation(c) || `Section ${c.clause_number || c.id}`;
+    if (c.clause_type === 'exclusions & disqualifications' || lower.includes('not eligible') || lower.includes('excluded')) {
+      citizenQuestions.push(`${refLabel} (${c.title}): Ask the helpdesk whether any exclusion rule applies to your family.`);
     }
-    if (c.clause_type === 'penalty/liquidated damages' || lower.includes('bond') || lower.includes('liquidated damages')) {
-      questionsForLawyer.push(`Clause ${c.clause_number || c.id} (${c.title}): Can the service bond liquidated damages training penalty be legally enforced without proof of actual specialized training costs?`);
-    }
-    if (c.clause_type === 'indemnity & liability' || (c.clause_type as string) === 'indemnity' || lower.includes('indemnify')) {
-      questionsForLawyer.push(`Clause ${c.clause_number || c.id} (${c.title}): Does the broad indemnity clause expose the party to third-party claims or damage beyond direct operational control?`);
-    }
-    if (c.clause_type === 'security deposit' && (c.risk_level === 'watch_out' || (c.risk_level as string) === 'medium' || lower.includes('upon vacating'))) {
-      questionsForLawyer.push(`Clause ${c.clause_number || c.id} (${c.title}): Should a specific 30-day refund deadline be added to prevent indefinite deposit retention upon vacating?`);
-    }
-    if (c.clause_type === 'term & termination' && lower.includes('lock-in')) {
-      questionsForLawyer.push(`Clause ${c.clause_number || c.id} (${c.title}): Is the full-rent penalty for early exit during lock-in enforceable under Section 74 of the Indian Contract Act?`);
+    if (c.clause_type === 'required documents' || lower.includes('certificate')) {
+      citizenQuestions.push(`${refLabel} (${c.title}): Confirm which office issues the required certificates and whether self-attested copies work.`);
     }
   }
 
-  if (questionsForLawyer.length === 0) {
-    questionsForLawyer.push(`Are all terms in ${docTitle} legally enforceable under applicable state and central laws?`);
+  if (citizenQuestions.length === 0) {
+    citizenQuestions.push(`Ask the scheme helpdesk to confirm the official portal link and submission deadline for ${docTitle}.`);
   }
 
-  const optionsNextSteps = [];
+  const optionsNextSteps: NextStepsOption[] = [];
 
-  const highRiskClause = syncedInputClauses.find((c) => c.risk_level === 'high');
-  if (highRiskClause) {
+  const eligibilitySection = syncedInputClauses.find((c) => c.clause_type === 'eligibility criteria' || c.clause_type === 'income & age limits');
+  if (eligibilitySection) {
     optionsNextSteps.push({
       id: 'opt_1',
-      title: `Negotiate Cap on ${highRiskClause.title}`,
-      description: `Propose a written amendment to cap financial penalties or liability in ${highRiskClause.title} before signing.`,
-      benefit: 'Reduces unexpected financial liability and severe legal exposure.',
-      tradeoff: 'May require written consent or negotiations with the issuing party.',
-    });
-  } else {
-    optionsNextSteps.push({
-      id: 'opt_1',
-      title: 'Request Written Clarifications on Key Terms',
-      description: 'Ask the issuing party to confirm ambiguous terms, dates, or oral promises in writing.',
-      benefit: 'Prevents verbal misunderstandings and provides written evidence of agreed terms.',
-      tradeoff: 'Requires waiting for formal written response before signing.',
+      title: 'Check Income, Age, and Eligibility Proof',
+      description: `Compare your household details with ${eligibilitySection.title} ${formatCircularCitation(eligibilitySection)} before starting your application.`,
+      benefit: 'Prevents form rejection during officer verification.',
+      tradeoff: 'You may need an updated income or residence certificate first.',
     });
   }
 
-  const noticeOrTermClause = syncedInputClauses.find((c) => c.clause_type.includes('notice') || c.clause_type.includes('term'));
-  if (noticeOrTermClause) {
+  const docsSection = syncedInputClauses.find((c) => c.clause_type === 'required documents');
+  if (docsSection) {
     optionsNextSteps.push({
       id: 'opt_2',
-      title: 'Verify Exit & Notice Period Conditions',
-      description: `Ensure notice lead times in ${noticeOrTermClause.title} apply mutually and do not lock you into rigid exit penalties.`,
-      benefit: 'Protects flexibility if personal or business circumstances change during the term.',
-      tradeoff: 'Other party may request reciprocal notice enforcement.',
-    });
-  } else {
-    optionsNextSteps.push({
-      id: 'opt_2',
-      title: 'Confirm Termination & Exit Timeline',
-      description: 'Define clear notice periods and refund timelines for ending the contract cleanly.',
-      benefit: 'Ensures an orderly transition without sudden forfeiture or lock-in penalties.',
+      title: 'Prepare Supporting Certificates Early',
+      description: `Scan and keep clean copies of all certificates listed under ${docsSection.title} ${formatCircularCitation(docsSection)}.`,
+      benefit: 'Speeds up online portal upload or CSC center submission.',
     });
   }
 
-  const depositOrPaymentClause = syncedInputClauses.find((c) => c.clause_type.includes('deposit') || c.clause_type.includes('payment') || c.clause_type.includes('compensation'));
-  if (depositOrPaymentClause) {
+  const deadlineSection = syncedInputClauses.find((c) => c.clause_type === 'deadlines & validity');
+  if (deadlineSection) {
     optionsNextSteps.push({
       id: 'opt_3',
-      title: 'Maintain Written Receipts & Condition Reports',
-      description: `Obtain signed receipts, bank transfer logs, and written pre-condition reports for ${depositOrPaymentClause.title}.`,
-      benefit: 'Serves as binding evidence if deposit deductions or payment disputes arise.',
-      tradeoff: 'Requires upfront documentation and recordkeeping.',
+      title: 'Apply Before the Circular Closing Date',
+      description: `Submit your application well ahead of the cutoff in ${deadlineSection.title} ${formatCircularCitation(deadlineSection)}.`,
+      benefit: 'Avoids last-minute portal traffic or missed benefit cycles.',
     });
   }
 
   optionsNextSteps.push({
     id: 'opt_4',
-    title: 'Consult Local Legal Advocate for Pre-Signing Review',
-    description: 'Share the generated Lawyer Briefing packet with a registered advocate to review state contract law compliance.',
-    benefit: 'Provides professional legal protection tailored to your specific jurisdiction.',
-    tradeoff: 'Incurs standard legal consultation time or fee.',
+    title: 'Confirm Updates on Official Portal or Helpdesk',
+    description: 'Check the Scheme Portals & Helpdesks tab or call the official citizen helpline for latest circular corrigenda.',
+    benefit: 'Ensures you follow the most recent government rules.',
   });
 
   const rawSynthesis: DocumentAnalysisResult = {
@@ -2818,27 +3299,45 @@ CRITICAL MANDATE:
     document_title: docTitle,
     category: guard1.category,
     overall_risk_score: overallRiskScore,
-    summary_simple: `${docTitle} analyzed with ${fullySynthesizedClauses.length} primary clauses extracted. Found ${highRiskCount} high risk clause(s).`,
-    summary_very_simple: `This document has ${fullySynthesizedClauses.length} main sections with ${highRiskCount} high risk warning(s).`,
+    summary_simple: enforceThreePointCitizenAnswer('', {
+      fallbackPoints: [
+        `${docTitle} is a ${guard1.category} circular with ${fullySynthesizedClauses.length} sections explained in plain English.`,
+        highRiskCount > 0
+          ? `There are ${highRiskCount} important exclusion or cutoff rule(s) to check carefully before applying.`
+          : `No strict rejection traps were flagged, but check eligibility limits and document lists carefully.`,
+        `Verify key dates and benefits directly against the official government portal.`,
+      ],
+    }),
+    summary_very_simple: enforceThreePointCitizenAnswer('', {
+      fallbackPoints: [
+        `This circular has ${fullySynthesizedClauses.length} main parts written in simple English.`,
+        `${highRiskCount > 0 ? `${highRiskCount} part(s) list strict rules you must watch closely.` : 'Check your eligibility and required papers first.'}`,
+        `Apply only through the official scheme portal or local helpdesk.`,
+      ],
+    }),
     clauses: fullySynthesizedClauses,
     contradictions: [],
     checklist: {
-      title: 'Action & Deadline Checklist',
-      stamp_duty_required: guard1.category === 'rental/lease agreement',
-      stamp_duty_note: 'Verify stamp duty requirements under local state rules.',
+      title: 'Citizen Action & Deadline Checklist',
+      stamp_duty_required: false,
+      stamp_duty_note: 'Verify fee rules and certificate requirements directly on the official scheme portal.',
       items: checklistItems,
-      disclaimer: 'Informational checklist generated by LegalLens.',
+      disclaimer: 'Informational summary generated by GovScheme Diff.',
     },
     options_next_steps: optionsNextSteps,
     lawyer_briefing: {
-      document_summary: `${docTitle} containing ${fullySynthesizedClauses.length} clauses with ${highRiskCount} high-risk flags.`,
+      document_summary: `${docTitle}: ${fullySynthesizedClauses.length} scheme sections summarized in plain English with ${highRiskCount} key condition notice(s).`,
       flagged_issues: [],
-      questions_to_ask_lawyer: questionsForLawyer,
+      questions_to_ask_lawyer: citizenQuestions,
       missing_protective_clauses: [],
-      recommended_next_steps: ['Review high-risk clauses with advocate', 'Request written clarification from other party'],
-      disclaimer: 'Advocate consultation packet prepared by LegalLens AI.',
+      recommended_next_steps: [
+        'Check all eligibility and income/age limits',
+        'Gather required certificates before the deadline',
+        'Confirm portal submission steps with the official helpdesk',
+      ],
+      disclaimer: 'Citizen briefing prepared by GovScheme Diff for informational reference only.',
     },
-    disclaimer: 'LegalLens AI analysis provided for informational purposes only under Advocate Act 1961.',
+    disclaimer: 'GovScheme Diff explains government scheme circulars in plain English. Always verify final rules with the issuing department.',
   };
 
   return validateAndEnforceGroundedSynthesis(rawSynthesis, fullySynthesizedClauses);
@@ -2855,34 +3354,31 @@ export function validateAndEnforceGroundedSynthesis(
     clause_id: c.id,
     clause_title: c.title,
     concern: c.one_line_consequence,
-    suggested_clause_edit: `Request modification of ${c.title} to cap financial liability and specify mutual reasonable terms.`,
+    suggested_clause_edit: `Check ${formatCircularCitation(c) || c.title} with your local helpdesk if unsure whether this exclusion or limit applies to you.`,
   }));
 
-  // 1. Enforce Grounded Checklist Items
+  // 1. Enforce Grounded Citizen Checklist Items
   let checklistItems = Array.isArray(result.checklist?.items) ? result.checklist.items : [];
-  if ((checklistItems.length < 2 || !checklistItems.some((i) => (i.title + ' ' + i.description + ' ' + i.action_required).toLowerCase().includes('notice'))) && syncedClauses.length > 0) {
+  if (checklistItems.length < 2 && syncedClauses.length > 0) {
     checklistItems = syncedClauses.map((c, idx) => {
       const lower = (c.original_text + ' ' + c.title).toLowerCase();
       let cat: 'deadline' | 'obligation' | 'notice_period' | 'stamp_duty' | 'warning' = 'obligation';
-      if (c.clause_type.includes('notice') || lower.includes('notice')) cat = 'notice_period';
+      if (c.clause_type === 'deadlines & validity' || lower.includes('deadline') || lower.includes('last date')) cat = 'deadline';
       else if (c.risk_level === 'high') cat = 'warning';
-      else if (c.clause_type.includes('stamp') || lower.includes('stamp')) cat = 'stamp_duty';
-      else if (lower.includes('due') || lower.includes('days') || lower.includes('month')) cat = 'deadline';
 
       let actionText = '';
-      if (c.clause_type === 'notice period' || lower.includes('notice')) {
-        actionText = `Mark required written notice lead time prior to exit (Clause ${c.clause_number || idx + 1}).`;
-      } else if (c.clause_type === 'term & termination' || lower.includes('lock-in')) {
-        actionText = `Review term length and mandatory lock-in exit rules (Clause ${c.clause_number || idx + 1}).`;
-      } else if (c.clause_type === 'security deposit' || lower.includes('deposit')) {
-        actionText = `Confirm security deposit refund timeframe and deduction criteria (Clause ${c.clause_number || idx + 1}).`;
+      if (c.clause_type === 'deadlines & validity' || lower.includes('deadline') || lower.includes('last date')) {
+        actionText = `Note application deadline or effective date (${c.section_reference || `Section ${c.clause_number || idx + 1}`}).`;
+      } else if (c.clause_type === 'required documents' || lower.includes('document')) {
+        actionText = `Prepare required supporting certificates (${c.section_reference || `Section ${c.clause_number || idx + 1}`}).`;
+      } else if (c.clause_type === 'eligibility criteria' || c.clause_type === 'income & age limits') {
+        actionText = `Confirm eligibility and income/age criteria (${c.section_reference || `Section ${c.clause_number || idx + 1}`}).`;
       } else if (c.risk_level === 'high') {
-        actionText = `Request written amendment to cap financial liability in ${c.title} (Clause ${c.clause_number || idx + 1}).`;
+        actionText = `Check important restriction or exclusion in ${c.title}.`;
       } else {
-        actionText = `Verify operational terms for ${c.title} (Clause ${c.clause_number || idx + 1}).`;
+        actionText = `Review scheme rules for ${c.title}.`;
       }
 
-      // Extract timeframe snippet if available
       let timeframe: string | undefined = undefined;
       const daysMatch = c.original_text.match(/\b(\d+)\s*(days?|months?|years?)\b/i);
       if (daysMatch) {
@@ -2901,138 +3397,76 @@ export function validateAndEnforceGroundedSynthesis(
     });
   }
 
-  // 2. Enforce Grounded Possibilities & Next Steps
+  // 2. Enforce Grounded Citizen Next Steps
   let optionsNextSteps = Array.isArray(result.options_next_steps) ? result.options_next_steps : [];
   if (optionsNextSteps.length < 2 && syncedClauses.length > 0) {
     optionsNextSteps = [];
-    const highRisk = syncedClauses.find((c) => c.risk_level === 'high');
-    if (highRisk) {
+    const exclusionClause = syncedClauses.find((c) => c.clause_type === 'exclusions & disqualifications');
+    if (exclusionClause) {
       optionsNextSteps.push({
-        id: 'opt_1',
-        title: `Negotiate Liability Cap on ${highRisk.title}`,
-        description: `Propose a written addendum to cap financial penalties or liquidated damages in ${highRisk.title} before signing.`,
-        benefit: 'Reduces unexpected financial liability and severe legal exposure.',
-        tradeoff: 'May require formal discussion with the issuing party before signing.',
+        id: 'opt_exclusions',
+        title: `Check Exclusions in ${exclusionClause.title}`,
+        description: `Review exclusion criteria in ${exclusionClause.title} ${formatCircularCitation(exclusionClause)} before submitting an application.`,
+        benefit: 'Avoids applying under an ineligible category.',
       });
     }
 
-    const nonCompeteClause = syncedClauses.find((c) => (c.clause_type as string) === 'non-compete/non-solicitation' || c.clause_type === 'use & restrictions' || (c.original_text + ' ' + c.title).toLowerCase().includes('non-compete'));
-    if (nonCompeteClause) {
+    const docsClause = syncedClauses.find((c) => c.clause_type === 'required documents');
+    if (docsClause) {
       optionsNextSteps.push({
-        id: 'opt_noncompete',
-        title: `Seek Scope Reduction on ${nonCompeteClause.title}`,
-        description: `Request narrowing the post-employment non-compete duration and geographical restriction under Section 27 of the Indian Contract Act.`,
-        benefit: 'Preserves future employment mobility and career opportunities.',
-        tradeoff: 'Other party may request strict confidentiality affirmation in exchange.',
+        id: 'opt_documents',
+        title: `Collect Documents Listed in ${docsClause.title}`,
+        description: `Prepare all required certificates mentioned in ${docsClause.title} ${formatCircularCitation(docsClause)}.`,
+        benefit: 'Prevents verification delays during application screening.',
       });
     }
 
-    const noticeClause = syncedClauses.find((c) => c.clause_type.includes('notice') || (c.original_text + ' ' + c.title).toLowerCase().includes('notice'));
-    if (noticeClause) {
+    const deadlineClause = syncedClauses.find((c) => c.clause_type === 'deadlines & validity');
+    if (deadlineClause) {
       optionsNextSteps.push({
-        id: 'opt_notice',
-        title: `Clarify Mutual Notice & Pay-in-Lieu Terms`,
-        description: `Confirm in writing that notice requirements in ${noticeClause.title} apply mutually and permit pay-in-lieu of notice.`,
-        benefit: 'Provides exit flexibility if career or operational circumstances change.',
-        tradeoff: 'Other party may request reciprocal notice enforcement.',
+        id: 'opt_deadline',
+        title: `Track Deadline in ${deadlineClause.title}`,
+        description: `Apply ahead of the cutoff specified in ${deadlineClause.title} ${formatCircularCitation(deadlineClause)}.`,
+        benefit: 'Prevents missing the scheme window.',
       });
     }
 
     optionsNextSteps.push({
-      id: 'opt_advocate',
-      title: 'Consult Legal Advocate for Pre-Signing Review',
-      description: 'Share this LegalLens analysis packet with a registered advocate to verify local statutory compliance.',
-      benefit: 'Provides tailored legal protection under applicable state and central laws.',
-      tradeoff: 'Incurs standard legal consultation time.',
+      id: 'opt_verify',
+      title: 'Verify Details on Official Government Portal',
+      description: 'Confirm latest circular updates, portal links, and required documents with the issuing department.',
+      benefit: 'Ensures accurate and up-to-date scheme application.',
     });
   }
 
-  // 3. Category-Aware Gap Analysis for Missing Protective Clauses
+  // 3. Circular Information Completeness Notes (only flag scheme sections missing from circular)
   const docCategory = (result.category || result.guard1?.category || '').toLowerCase();
   const candidateMissing: string[] = Array.isArray(result.lawyer_briefing?.missing_protective_clauses)
     ? [...result.lawyer_briefing.missing_protective_clauses]
     : [];
 
-  if (docCategory.includes('employment')) {
-    candidateMissing.push(
-      'Severance Compensation & Exit Pay Clause',
-      'Intellectual Property Carve-Out (Prior Inventions Exclusion)',
-      'Confidentiality Legal & Regulatory Carve-Out'
-    );
-  } else if (docCategory.includes('rental') || docCategory.includes('lease')) {
-    candidateMissing.push(
-      'Rent Escalation Cap & Written Notice Requirement',
-      'Security Deposit 30-Day Refund Deadline Clause',
-      'Structural Repair vs Routine Maintenance Division Clause'
-    );
-  }
-
-  // Deduplicate candidates
   const uniqueCandidateMissing = Array.from(new Set(candidateMissing));
-
-  // Grounding filter: Purge candidate missing clause if already present in document
   const validatedMissingClauses = uniqueCandidateMissing.filter((item) => {
     const itemLower = item.toLowerCase();
-    if (itemLower.includes('dispute') || itemLower.includes('arbitrat')) {
-      const exists = syncedClauses.some((c) => (c.clause_type as string) === 'dispute resolution/arbitration' || c.clause_type.includes('dispute') || c.clause_type.includes('governing law') || /arbitrat|dispute resolution/i.test(c.original_text + ' ' + c.title));
-      if (exists) return false;
-    }
-    if (itemLower.includes('notice')) {
-      const exists = syncedClauses.some((c) => c.clause_type === 'notice period' || /notice period|days notice/i.test(c.original_text + ' ' + c.title));
-      if (exists) return false;
-    }
-    if (itemLower.includes('governing law') || itemLower.includes('jurisdiction')) {
-      const exists = syncedClauses.some((c) => c.clause_type === 'governing law & jurisdiction' || /governing law|jurisdiction/i.test(c.original_text + ' ' + c.title));
-      if (exists) return false;
-    }
-    if (itemLower.includes('indemnit')) {
-      const exists = syncedClauses.some((c) => (c.clause_type as string) === 'indemnity' || c.clause_type === 'indemnity & liability' || /indemnit/i.test(c.original_text + ' ' + c.title));
-      if (exists) return false;
-    }
-    if (itemLower.includes('confidential')) {
-      const exists = syncedClauses.some((c) => c.clause_type === 'confidentiality' || /confidential/i.test(c.original_text + ' ' + c.title));
-      if (exists) return false;
-    }
-    if (itemLower.includes('severance')) {
-      const exists = syncedClauses.some((c) => /severance|exit pay|termination pay/i.test(c.original_text + ' ' + c.title));
-      if (exists) return false;
-    }
-    if (itemLower.includes('prior inventions') || itemLower.includes('ip carve')) {
-      const exists = syncedClauses.some((c) => /prior invention|pre-existing ip|ip carve/i.test(c.original_text + ' ' + c.title));
-      if (exists) return false;
-    }
-    if (itemLower.includes('deposit') && itemLower.includes('refund')) {
-      const exists = syncedClauses.some((c) => /30[- ]day|deposit refund deadline/i.test(c.original_text + ' ' + c.title));
-      if (exists) return false;
-    }
+    if (itemLower.includes('eligib') && syncedClauses.some((c) => c.clause_type === 'eligibility criteria')) return false;
+    if (itemLower.includes('document') && syncedClauses.some((c) => c.clause_type === 'required documents')) return false;
+    if (itemLower.includes('deadline') && syncedClauses.some((c) => c.clause_type === 'deadlines & validity')) return false;
     return true;
   });
 
-  // 4. Grounded Advocate Questions (No Generic Hardcoded Strings)
+  // 4. Grounded Helpdesk Questions
   const candidateQuestions = Array.isArray(result.lawyer_briefing?.questions_to_ask_lawyer)
     ? [...result.lawyer_briefing.questions_to_ask_lawyer]
     : [];
 
   for (const c of syncedClauses) {
     const lower = (c.original_text + ' ' + c.title).toLowerCase();
-    if ((c.clause_type as string) === 'non-compete/non-solicitation' || c.clause_type === 'use & restrictions' || lower.includes('non-compete')) {
-      candidateQuestions.push(`Clause ${c.clause_number || c.id} (${c.title}): Is the post-employment non-compete restriction enforceable under Section 27 of the Indian Contract Act?`);
-    }
-    if (c.clause_type === 'penalty/liquidated damages' || lower.includes('bond') || lower.includes('liquidated damages')) {
-      candidateQuestions.push(`Clause ${c.clause_number || c.id} (${c.title}): Can the service bond liquidated damages training penalty be legally enforced without proof of actual specialized training costs?`);
-    }
-    if (c.clause_type === 'indemnity & liability' || (c.clause_type as string) === 'indemnity' || lower.includes('indemnify')) {
-      candidateQuestions.push(`Clause ${c.clause_number || c.id} (${c.title}): Does the broad indemnity clause expose the party to third-party claims or damage beyond direct operational control?`);
-    }
-    if (c.clause_type === 'security deposit' && (c.risk_level === 'watch_out' || (c.risk_level as string) === 'medium' || lower.includes('upon vacating'))) {
-      candidateQuestions.push(`Clause ${c.clause_number || c.id} (${c.title}): Should a specific 30-day refund deadline be added to prevent indefinite deposit retention upon vacating?`);
-    }
-    if (c.clause_type === 'term & termination' && lower.includes('lock-in')) {
-      candidateQuestions.push(`Clause ${c.clause_number || c.id} (${c.title}): Is the full-rent penalty for early exit during lock-in enforceable under Section 74 of the Indian Contract Act?`);
+    const ref = formatCircularCitation(c) || `Section ${c.clause_number || c.id}`;
+    if (c.clause_type === 'exclusions & disqualifications' || lower.includes('ineligible')) {
+      candidateQuestions.push(`${ref} (${c.title}): Does any exclusion condition apply to my household?`);
     }
   }
 
-  // Blocklist filter for generic boilerplate questions
   const genericBlocklist = [
     /are all terms in .* legally enforceable/i,
     /is this agreement legally binding/i,
@@ -3058,77 +3492,40 @@ export function validateAndEnforceGroundedSynthesis(
     overall_risk_score: overallRiskScore,
     clauses: syncedClauses,
     checklist: {
-      title: result.checklist?.title || 'Action & Deadline Checklist',
-      stamp_duty_required: result.checklist?.stamp_duty_required ?? (docCategory.includes('rental') || docCategory.includes('lease')),
-      stamp_duty_note: result.checklist?.stamp_duty_note || 'Verify stamp duty requirements under local state rules.',
+      title: result.checklist?.title || 'Citizen Action & Deadline Checklist',
+      stamp_duty_required: false,
+      stamp_duty_note: result.checklist?.stamp_duty_note || 'Verify any application fee or certificate requirements on the official scheme portal.',
       items: checklistItems,
-      disclaimer: result.checklist?.disclaimer || 'Informational checklist generated by LegalLens.',
+      disclaimer: result.checklist?.disclaimer || 'Informational checklist generated by GovScheme Diff.',
     },
     options_next_steps: optionsNextSteps,
     lawyer_briefing: {
       ...result.lawyer_briefing,
-      document_summary: `${result.document_title || 'Document'} containing ${syncedClauses.length} clauses with ${highRiskClauses.length} high-risk flags.`,
+      document_summary: `${safeDocTitle}: ${syncedClauses.length} circular sections explained in plain English (${highRiskClauses.length} key condition notice(s)).`,
       flagged_issues: validatedFlaggedIssues,
       missing_protective_clauses: validatedMissingClauses,
       questions_to_ask_lawyer: groundedQuestions,
-      disclaimer: result.lawyer_briefing?.disclaimer || 'Advocate consultation packet prepared by LegalLens AI.',
+      disclaimer: result.lawyer_briefing?.disclaimer || 'Citizen briefing packet prepared by GovScheme Diff.',
     },
-    disclaimer: result.disclaimer || 'LegalLens AI analysis provided for informational purposes only under Advocate Act 1961.',
+    disclaimer: result.disclaimer || 'GovScheme Diff explains government scheme circulars in plain English. Always confirm final rules with the issuing department.',
   };
 }
 
 export function detectCrossClauseConflicts(
-  clauses: SimplifiedClause[],
-  fullText: string = ''
+  _clauses: SimplifiedClause[],
+  _fullText: string = ''
 ): {
   conflicts: InternalContradiction[];
   executionBlock: ExecutionBlockAnalysis;
 } {
-  const conflicts: InternalContradiction[] = [];
-  const textLower = fullText.toLowerCase();
-
-  const termClause = clauses.find(
-    (c) => c.clause_type.includes('term') || c.title.toLowerCase().includes('term') || c.original_text.toLowerCase().includes('lock-in')
-  );
-  const noticeClause = clauses.find(
-    (c) => c.clause_type.includes('notice') || c.title.toLowerCase().includes('notice') || c.original_text.toLowerCase().includes('notice')
-  );
-
-  if (
-    termClause &&
-    noticeClause &&
-    termClause.id !== noticeClause.id &&
-    (termClause.original_text.toLowerCase().includes('lock-in') || termClause.original_text.toLowerCase().includes('lock in')) &&
-    (noticeClause.original_text.toLowerCase().includes('notice') || noticeClause.title.toLowerCase().includes('notice'))
-  ) {
-    conflicts.push({
-      id: 'conflict_lockin_notice',
-      clause_a_id: termClause.id,
-      clause_b_id: noticeClause.id,
-      clause_a_title: termClause.title,
-      clause_b_title: noticeClause.title,
-      clause_a_obligation: 'Mandatory lock-in period prohibits early exit.',
-      clause_b_obligation: 'Right to terminate with written notice.',
-      description: 'Lock-in Period vs Notice Period Exit Collision',
-      explanation: `Contradiction detected between ${termClause.title} (lock-in restrictions) and ${noticeClause.title} (written notice exit right).`,
-      risk_level: 'high',
-    });
-  }
-
-  const witnessMissing =
-    !textLower.includes('witness') &&
-    !textLower.includes('gawah') &&
-    !textLower.includes('गवाह') &&
-    !textLower.includes('attested');
-
-  const executionBlock: ExecutionBlockAnalysis = {
-    present: textLower.includes('signed') || textLower.includes('in witness whereof') || textLower.includes('lessor') || textLower.includes('lessee'),
-    missing_signatures: !textLower.includes('signed') && !textLower.includes('signature'),
-    witness_attestation_missing: witnessMissing,
-    defect_description: witnessMissing ? 'Witness signature / attestation block is missing.' : undefined,
+  return {
+    conflicts: [],
+    executionBlock: {
+      present: true,
+      missing_signatures: false,
+      witness_attestation_missing: false,
+    },
   };
-
-  return { conflicts, executionBlock };
 }
 
 export async function analyzeDocumentText(
@@ -3137,13 +3534,13 @@ export async function analyzeDocumentText(
   language: string = 'en'
 ): Promise<DocumentAnalysisResult> {
   const guard1 = await runGuard1InputGateAsync(text);
-  if (!guard1.is_legal_document) {
+  if (!guard1.is_valid_circular) {
     throw new Error(guard1.rejection_reason || 'Document rejected by Guard 1 input gate.');
   }
 
   const rawClauses = await chunkDocumentTextIntoClausesAsync(text);
   if (!rawClauses || rawClauses.length === 0) {
-    throw new Error('Document rejected by Guard 1: No extractable legal clauses or binding terms were found in this document.');
+    throw new Error('Document rejected by Guard 1: No extractable scheme sections or policy provisions were found in this document.');
   }
 
   const clauses = await applyRiskTaggingAndGroundingAsync(rawClauses, guard1.category);
@@ -3158,7 +3555,7 @@ export function calculateDocumentOverallRiskScore(clauses: SimplifiedClause[]): 
   return Math.min(95, Math.max(10, 30 + highRiskCount * 25 + mediumRiskCount * 10));
 }
 
-// Stage 4: Compare 2 Documents with Asymmetry Surface & Schema Compliance
+// Stage 4: Deterministic Circular Comparison (Added / Removed / Modified / Unchanged + Field Diffs)
 export async function compareTwoDocuments(
   docA: DocumentAnalysisResult,
   docB: DocumentAnalysisResult
@@ -3167,46 +3564,46 @@ export async function compareTwoDocuments(
   const clausesB = Array.isArray(docB?.clauses) ? docB.clauses : [];
   const alignment = alignClauses(clausesA, clausesB);
 
-  const docATitle = docA?.document_title && typeof docA.document_title === 'string' && docA.document_title.trim() !== '' && docA.document_title.toLowerCase() !== 'undefined'
-    ? docA.document_title.trim()
-    : 'Document A';
-  const docBTitle = docB?.document_title && typeof docB.document_title === 'string' && docB.document_title.trim() !== '' && docB.document_title.toLowerCase() !== 'undefined'
-    ? docB.document_title.trim()
-    : 'Document B';
+  const docATitle =
+    docA?.document_title &&
+    typeof docA.document_title === 'string' &&
+    docA.document_title.trim() !== '' &&
+    docA.document_title.toLowerCase() !== 'undefined'
+      ? docA.document_title.trim()
+      : 'Circular A';
+  const docBTitle =
+    docB?.document_title &&
+    typeof docB.document_title === 'string' &&
+    docB.document_title.trim() !== '' &&
+    docB.document_title.toLowerCase() !== 'undefined'
+      ? docB.document_title.trim()
+      : 'Circular B';
 
-  const scoreA = typeof docA?.overall_risk_score === 'number' && !isNaN(docA.overall_risk_score)
-    ? docA.overall_risk_score
-    : calculateDocumentOverallRiskScore(clausesA);
-  const scoreB = typeof docB?.overall_risk_score === 'number' && !isNaN(docB.overall_risk_score)
-    ? docB.overall_risk_score
-    : calculateDocumentOverallRiskScore(clausesB);
+  const addedCount = alignment.alignedPairs.filter((p) => p.change_type === 'added').length;
+  const removedCount = alignment.alignedPairs.filter((p) => p.change_type === 'removed').length;
+  const modifiedCount = alignment.alignedPairs.filter((p) => p.change_type === 'modified').length;
+  const unchangedCount = alignment.alignedPairs.filter((p) => p.change_type === 'unchanged').length;
 
-  const matchedPairs = alignment.alignedPairs.filter((p) => p.status === 'matched');
-  const matchedCount = matchedPairs.length;
+  const allFieldChanges = alignment.alignedPairs.flatMap((p) => p.detected_field_changes || []);
+  const changeHighlights = Array.from(
+    new Set(allFieldChanges.map((fc) => `${fc.label}: ${fc.old_value} -> ${fc.new_value}`))
+  );
 
-  const aOnlyTitles = alignment.aOnlyClauses.map((c) => c.title || c.clause_type).join(', ');
-  const bOnlyTitles = alignment.bOnlyClauses.map((c) => c.title || c.clause_type).join(', ');
+  const addedTitles = alignment.bOnlyClauses.map((c) => c.title || c.clause_type).join(', ');
+  const removedTitles = alignment.aOnlyClauses.map((c) => c.title || c.clause_type).join(', ');
 
-  let summary = `Compared ${docATitle} against ${docBTitle}.\n`;
-  if (alignment.aOnlyClauses.length > 0) {
-    summary += `Present in Document A only: ${aOnlyTitles}.\n`;
+  let summary = `Compared ${docATitle} against ${docBTitle}: ${addedCount} Added, ${removedCount} Removed, ${modifiedCount} Modified, ${unchangedCount} Unchanged.`;
+  if (addedCount > 0) {
+    summary += `\nAdded in Circular B: ${addedTitles}.`;
   }
-  if (alignment.bOnlyClauses.length > 0) {
-    summary += `Present in Document B only: ${bOnlyTitles}.\n`;
+  if (removedCount > 0) {
+    summary += `\nRemoved from Circular A: ${removedTitles}.`;
   }
-
-  if (matchedCount === 0) {
-    summary += `These documents have significantly different structures and purposes; 0 common clause types were found. Matched 0 common clause type(s).`;
-  } else {
-    summary += `Matched ${matchedCount} common clause type(s).`;
+  if (changeHighlights.length > 0) {
+    summary += `\nDetected policy changes: ${changeHighlights.join(' | ')}.`;
+  } else if (modifiedCount === 0 && addedCount === 0 && removedCount === 0) {
+    summary += `\nNo policy text differences were detected between the two circulars.`;
   }
-
-  const winnerRec =
-    scoreA < scoreB
-      ? `${docATitle} has a lower overall risk score (${scoreA} vs ${scoreB}) and is comparatively safer.`
-      : scoreB < scoreA
-        ? `${docBTitle} has a lower overall risk score (${scoreB} vs ${scoreA}) and is comparatively safer.`
-        : `${docATitle} and ${docBTitle} have identical overall risk scores (${scoreA} vs ${scoreB}).`;
 
   return {
     doc_a_title: docATitle,
@@ -3214,9 +3611,12 @@ export async function compareTwoDocuments(
     aligned_pairs: alignment.alignedPairs,
     a_only_clauses: alignment.aOnlyClauses,
     b_only_clauses: alignment.bOnlyClauses,
+    added_count: addedCount,
+    removed_count: removedCount,
+    modified_count: modifiedCount,
+    unchanged_count: unchangedCount,
     key_differences_summary: summary,
-    winner_recommendation: winnerRec,
-    disclaimer: 'Comparison generated by LegalLens for informational evaluation.',
+    disclaimer: 'Deterministic circular comparison generated by GovScheme Diff for informational purposes. Always verify official updates with the issuing department.',
   };
 }
 
@@ -3227,158 +3627,145 @@ export function postProcessCleanResponseText(text: string): string {
   const processedLines = lines.map((line) => {
     const isTableLine = line.trim().startsWith('|') && line.trim().endsWith('|') && line.trim().length > 2;
     if (isTableLine) {
-      return line; // Preserve markdown table lines intact for UI table rendering
+      return line;
     }
-    // Clean raw double asterisks from regular conversational text
     return line.replace(/\*\*([^*]+)\*\*/g, '$1');
   });
 
-  return processedLines.join('\n');
+  return processedLines.join('\n').trim();
 }
 
-// Grounded Document Q&A (Live Conversational AI Mode with Smart Intent Fallback)
+// Grounded Citizen Circular Q&A (English-Only, 3-Point Simple Everyday English)
 export async function answerDocumentQuestion(
   document: DocumentAnalysisResult | null,
   question: string,
   history: ChatMessage[],
   inputContext?: any,
-  language: string = 'en'
+  _language: string = 'en'
 ): Promise<ChatMessage> {
-  const isKannada = language === 'kn';
-
-  // Step 1: Guard 2b Legal Safety Filter on user input
+  // Step 1: Safety Filter
   const safety = runGuard2bSafetyFilter(question);
   if (!safety.isSafe) {
-    const refusalText = isKannada
-      ? 'LegalLens ಸುರಕ್ಷತಾ ಪರಿಶೀಲನೆ ಸಕ್ರಿಯವಾಗಿದೆ: ಕಾನೂನುಬಾಹಿರ ಉದ್ದೇಶಗಳು, ದಾಖಲೆಗಳ ನಕಲಿ ಸೃಷ್ಟಿ, ತೆರಿಗೆ ವಂಚನೆ ಅಥವಾ ಮೋಸಕ್ಕೆ ನಾವು ಸಹಾಯ ಮಾಡುವುದಿಲ್ಲ. ನಮ್ಮ ಸೇವೆ ಕಾನೂನು ಪಾಲನೆ ಮತ್ತು ಜಾಗೃತಿಯನ್ನು ಉತ್ತೇಜಿಸುತ್ತದೆ.'
-      : safety.reason!;
     return {
       id: `msg_refused_${Date.now()}`,
       sender: 'assistant',
-      text: refusalText,
+      text: safety.reason!,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       is_flagged_unsafe: true,
-      safety_reason: refusalText,
+      safety_reason: safety.reason!,
     };
   }
 
-  // Step 2: Extract grounding clause IDs by filtering out common stop words
+  // Step 2: Retrieve relevant circular sections & exact citations (ranked by relevance)
   const STOP_WORDS = new Set([
-    'what', 'is', 'your', 'name', 'who', 'are', 'you', 'how', 'this', 'that', 'with', 'from',
-    'have', 'will', 'been', 'there', 'they', 'them', 'their', 'which', 'where', 'when', 'does',
-    'would', 'could', 'should', 'about', 'can', 'please', 'tell', 'me', 'ಏನು', 'ನೀವು', 'ಯಾರು', 'ಹೇಗೆ', 'ಇದು', 'ಅದು', 'ಮತ್ತು', 'ಇಲ್ಲಿ', 'ಗೆ', 'ನಲ್ಲಿ'
+    'what', 'which', 'who', 'whom', 'where', 'when', 'why', 'how', 'is', 'are', 'was', 'were',
+    'your', 'you', 'they', 'them', 'their', 'this', 'that', 'these', 'those', 'the', 'and', 'for',
+    'nor', 'but', 'yet', 'with', 'from', 'into', 'onto', 'about', 'under', 'over', 'all', 'any',
+    'each', 'every', 'some', 'have', 'has', 'had', 'will', 'would', 'shall', 'should', 'can',
+    'could', 'may', 'might', 'does', 'did', 'been', 'being', 'there', 'here', 'please', 'tell',
+    'give', 'show', 'explain', 'under', 'scheme', 'circular', 'circulars', 'uploaded', 'document',
+    'section', 'page', 'provide', 'provides', 'mentioned', 'details', 'detail',
   ]);
 
   const qTokens = question
     .toLowerCase()
-    .split(/[^\w\u0900-\u097F\u0C80-\u0CFF]+/)
+    .split(/[^\w]+/)
     .filter((t) => t.length > 2 && !STOP_WORDS.has(t));
 
   const citedClauseIds: string[] = [];
+  const matchedClauses: SimplifiedClause[] = [];
 
   if (qTokens.length > 0 && document) {
-    (document.clauses || []).forEach((c: SimplifiedClause) => {
-      const text = (c.original_text + ' ' + c.simple_explanation + ' ' + c.title).toLowerCase();
-      const hasMatch = qTokens.some((t) => text.includes(t));
-      if (hasMatch) {
-        citedClauseIds.push(c.id);
+    const scored: Array<{ clause: SimplifiedClause; score: number }> = [];
+    for (const c of document.clauses || []) {
+      const titleLower = (c.title || '').toLowerCase();
+      const origLower = (c.original_text || '').toLowerCase();
+      const typeLower = (c.clause_type || '').toLowerCase();
+      const isHeader = (c.section_reference || '').toLowerCase().includes('header');
+
+      let score = 0;
+      for (const token of qTokens) {
+        const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const wordRe = new RegExp(`\\b${escaped}`, 'i');
+        if (wordRe.test(titleLower)) score += 4;
+        if (wordRe.test(origLower)) score += 2;
+        if (wordRe.test(typeLower)) score += 2;
       }
-    });
+
+      if (score > 0) {
+        if (isHeader && score <= 4) score -= 1;
+        scored.push({ clause: c, score });
+      }
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+    for (const item of scored) {
+      citedClauseIds.push(item.clause.id);
+      matchedClauses.push(item.clause);
+    }
   }
 
-  // Build active input pipeline context (uploaded file / camera photo / pasted text / comparison mode)
+  const primaryCitation = matchedClauses.length > 0
+    ? formatCircularCitation(matchedClauses[0])
+    : (document?.clauses?.[0] ? formatCircularCitation(document.clauses[0]) : '');
+
+  // Build active circular / comparison context
   let activeInputSummary = '';
   if (inputContext) {
     if (inputContext.isComparisonMode || inputContext.docAText || inputContext.docBText) {
-      activeInputSummary += `\n======================================================================
-ACTIVE MODE: COMPARE CONTRACTS SECTION (DUAL-DOCUMENT GROUNDING)
-======================================================================`;
-      if (inputContext.docAText) {
-        activeInputSummary += `\n- DOCUMENT A (${inputContext.docATitle || 'Document A'}):\n"""\n${inputContext.docAText.slice(0, 5000)}\n"""`;
-      } else {
-        activeInputSummary += `\n- DOCUMENT A: [No text entered yet]`;
-      }
-
-      if (inputContext.docBText) {
-        activeInputSummary += `\n- DOCUMENT B (${inputContext.docBTitle || 'Document B'}):\n"""\n${inputContext.docBText.slice(0, 5000)}\n"""`;
-      } else {
-        activeInputSummary += `\n- DOCUMENT B: [No text entered yet]`;
-      }
+      activeInputSummary += `\nACTIVE MODE: COMPARE TWO GOVERNMENT CIRCULARS`;
+      activeInputSummary += inputContext.docAText
+        ? `\n- CIRCULAR A (${inputContext.docATitle || 'Circular A'}):\n"""\n${inputContext.docAText.slice(0, 5000)}\n"""`
+        : `\n- CIRCULAR A: [Not loaded yet]`;
+      activeInputSummary += inputContext.docBText
+        ? `\n- CIRCULAR B (${inputContext.docBTitle || 'Circular B'}):\n"""\n${inputContext.docBText.slice(0, 5000)}\n"""`
+        : `\n- CIRCULAR B: [Not loaded yet]`;
 
       if (inputContext.comparisonResult) {
-        activeInputSummary += `\n- EXECUTED COMPARISON SUMMARY:
-  • Recommendation: ${inputContext.comparisonResult.winner_recommendation}
-  • Key Differences: ${inputContext.comparisonResult.key_differences_summary}`;
+        const cmp = inputContext.comparisonResult;
+        activeInputSummary += `\n- COMPARISON COUNTS: Added=${cmp.added_count ?? 0}, Removed=${cmp.removed_count ?? 0}, Modified=${cmp.modified_count ?? 0}, Unchanged=${cmp.unchanged_count ?? 0}\n- SUMMARY: ${cmp.key_differences_summary || ''}`;
       }
     } else {
       if (inputContext.uploadedFileName) {
-        activeInputSummary += `\n- CURRENT UPLOADED INPUT FILE: "${inputContext.uploadedFileName}" (Size: ${inputContext.uploadedFileSize || 'Unknown'}, Type: ${inputContext.uploadedFileType || 'File'}). Status: File is uploaded/selected in the Document Capture section.`;
+        activeInputSummary += `\n- UPLOADED CIRCULAR FILE: "${inputContext.uploadedFileName}" (${inputContext.uploadedFileSize || 'Unknown size'})`;
       }
       if (inputContext.extractedInputText) {
-        activeInputSummary += `\n- EXTRACTED INNER FILE CONTENT / TEXT:\n"""\n${inputContext.extractedInputText.slice(0, 3000)}\n"""`;
+        activeInputSummary += `\n- EXTRACTED CIRCULAR TEXT:\n"""\n${inputContext.extractedInputText.slice(0, 4000)}\n"""`;
       } else if (inputContext.pastedText) {
-        activeInputSummary += `\n- CURRENT PASTED INPUT TEXT:\n"""\n${inputContext.pastedText.slice(0, 3000)}\n"""`;
-      }
-      if (inputContext.capturedPhoto) {
-        activeInputSummary += `\n- CURRENT CAMERA SNAPSHOT: Image captured via phone/webcam camera in Document Capture section.`;
+        activeInputSummary += `\n- PASTED CIRCULAR TEXT:\n"""\n${inputContext.pastedText.slice(0, 4000)}\n"""`;
       }
     }
   }
 
-  // Step 3: Try Live AI Chat Completion if API Key is configured
-  const docTitle = document?.document_title || (inputContext?.uploadedFileName ? `File Selected: ${inputContext.uploadedFileName}` : 'No Document Analyzed Yet');
-  const langPromptInstruction = isKannada
-    ? `\n\n======================================================================
-CRITICAL MANDATORY INSTRUCTION - LANGUAGE OVERRIDE: KANNADA (ಕನ್ನಡ)
-======================================================================
-The user's active language preference in LegalLens is KANNADA (ಕನ್ನಡ).
-You MUST write your ENTIRE response ONLY in Kannada using Kannada script (ಕನ್ನಡ ಲಿಪಿ).
-DO NOT respond in English or Roman script even if the user sends their query in English or short words like "Hello", "Hi", "What is notice period?", "Explain this".
-The user's active language mode ("kn") STRICTLY OVERRIDES input language detection.
-Every sentence of your response must be in natural, fluent, accessible Kannada (Kannada script).
-======================================================================`
-    : `\n\n======================================================================
-CRITICAL MANDATORY INSTRUCTION - LANGUAGE OVERRIDE: ENGLISH
-======================================================================
-The user's active language preference in LegalLens is ENGLISH.
-You MUST write your ENTIRE response in clear, everyday English.
-======================================================================`;
+  const docTitle = document?.document_title || (inputContext?.uploadedFileName ? inputContext.uploadedFileName : 'No circular loaded yet');
 
-  const systemPrompt = `You are LegalLens AI, a friendly, intelligent, context-aware AI assistant (powered by GenAI like ChatGPT/Gemini).
-You are assisting the user on the LegalLens application.${langPromptInstruction}
+  const systemPrompt = `You are GovScheme Diff AI, a friendly citizen helper that explains Indian government scheme circulars in plain, simple everyday English ONLY.
 
-DOCUMENT GROUNDING CONTEXT:
+CIRCULAR GROUNDING SECTIONS:
 ${document?.clauses && document.clauses.length > 0
       ? (document.clauses || [])
         .map(
           (c) =>
-            `[Clause ID: ${c.id} | Title: ${c.title}]\nOriginal: ${c.original_text}\nExplanation: ${c.simple_explanation}\nRisk: ${c.risk_level}\nConsequence: ${c.one_line_consequence}`
+            `[Section ID: ${c.id} | Title: ${c.title} | Ref: ${formatCircularCitation(c) || `Section ${c.clause_number || c.id}`}]\nOriginal Circular Text: ${c.original_text}`
         )
         .join('\n---\n')
-      : 'No single document analysis generated yet.'}
+      : 'No single analyzed circular loaded yet.'}
 
-ACTIVE INPUT PIPELINE & COMPARISON CONTEXT:
-${activeInputSummary || 'No file or text currently selected.'}
+ACTIVE INPUT / COMPARISON CONTEXT:
+${activeInputSummary || 'No circular file or text loaded yet.'}
 
-SYSTEM INSTRUCTIONS & FORMATTING GUARDRAILS:
-1. Be helpful, intelligent, dynamic, and conversational like ChatGPT or Gemini.
-2. If the user asks about what file, image, PDF, or text they uploaded/pasted, use ACTIVE INPUT PIPELINE & COMPARISON CONTEXT above to answer directly.
-3. If an analyzed document exists, answer questions about contract clauses, rent, deposit, notice, or legal terms using DOCUMENT GROUNDING CONTEXT above and reference relevant clauses.
-4. COMPARE CONTRACTS MODE INSTRUCTIONS:
-   - When in Compare Contracts mode (or when Document A / Document B context is provided above):
-   - Direct questions about Document A specifically: Answer based on Document A text and clearly label with "[Doc A]" or "In Document A...".
-   - Direct questions about Document B specifically: Answer based on Document B text and clearly label with "[Doc B]" or "In Document B...".
-   - Ambiguous/General questions (e.g., "What is the notice period?", "What is the penalty?"): Default to answering for BOTH Document A and Document B side-by-side in a clean comparison table or labeled sections ([Document A] vs [Document B]).
-   - If only one document (A or B) is currently loaded, answer based on the available document without erroring.
-   - If NEITHER Document A nor Document B has text loaded, politely advise the user to paste or upload Document A or Document B to analyze.
-5. CLEAN TYPOGRAPHY: Do NOT wrap headings or phrases in raw double asterisks (avoid raw **bolding**). Use clean section headings, capital headers, or bullet points (•) for structural hierarchy.
-6. PROPER TABLE RENDERING: When outputting structured legal breakdowns, clause comparisons, or term metrics, format them as clean standard Markdown tables using pipes (| Header 1 | Header 2 |) and alignment rows (| --- | --- |). Do NOT output loose pipes (||) or broken text blocks.
-7. Always maintain a clear, reassuring, and plain-language tone.
-${langPromptInstruction}`;
-
-  const formattedUserPrompt = isKannada
-    ? `${question}\n\n[System Mandatory Note: The user has selected Kannada language mode. You MUST reply ONLY in Kannada script.]`
-    : question;
+MANDATORY CITIZEN ANSWER RULES (STRICT):
+1. Reply in ENGLISH ONLY. Use very simple everyday words; avoid legal, official, or technical jargon.
+2. EVERY answer MUST contain EXACTLY THREE short numbered points:
+   1. ...
+   2. ...
+   3. ...
+   Do NOT add any intro sentence before "1." or closing sentence after "3.". Do NOT output markdown tables or bold asterisks (**).
+3. Base EVERY answer strictly on the uploaded/provided circular text above. NEVER invent eligibility rules, benefits, amounts, dates, age/income limits, or required documents.
+4. If asked details are NOT in the uploaded circular, explicitly include the exact sentence:
+   "This information is not mentioned in the uploaded circular."
+5. Include the correct page number and section/clause reference wherever available (for example: "(Page 1, Section 2)").
+6. In Compare Circulars mode, clearly mention "[Circular A]" or "[Circular B]" and the page/section numbers when comparing changes.`;
 
   const chatMessagesPayload = [
     { role: 'system', content: systemPrompt },
@@ -3386,7 +3773,7 @@ ${langPromptInstruction}`;
       role: h.sender === 'user' ? ('user' as const) : ('assistant' as const),
       content: h.text,
     })),
-    { role: 'user' as const, content: formattedUserPrompt },
+    { role: 'user' as const, content: question },
   ];
 
   const aiTextResponse = await callAiChatCompletion(chatMessagesPayload);
@@ -3394,123 +3781,169 @@ ${langPromptInstruction}`;
   if (aiTextResponse === 'RATE_LIMIT_EXHAUSTED') {
     const secondInMinute = Math.floor((Date.now() % 60000) / 1000);
     const resetSeconds = Math.max(1, 60 - secondInMinute);
-    const rateLimitText = isKannada
-      ? `⚡ ಸಿಸ್ಟಮ್ ವಿನಂತಿ ಮಿತಿ ತಲುಪಿದೆ — ಈ ನಿಮಿಷದ 60 RPM / 12,000 TPM ಮಿತಿ ಪೂರ್ಣಗೊಂಡಿದೆ. ${resetSeconds} ಸೆಕೆಂಡುಗಳಲ್ಲಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.`
-      : `⚡ System Rate Limit Reached — 60 RPM / 12,000 TPM limit hit for this minute. Capacity refills in ${resetSeconds}s. Please wait a moment before sending another query!`;
     return {
       id: `msg_rate_limit_${Date.now()}`,
       sender: 'assistant',
-      text: rateLimitText,
+      text: `System rate limit reached for this minute. Please wait ${resetSeconds}s and try again.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       quota: getQuotaStatus(),
     };
   }
 
   let textResponse = aiTextResponse;
+  let isMissingInfoFallback = false;
 
-  // Step 4: Smart Conversational & Grounded Intent Engine if Live AI is offline or key is non-live
+  // Step 4: Deterministic Grounded Fallback when AI is offline / demoMode
   if (!textResponse) {
     const trimmedLower = question.trim().toLowerCase();
+    const isFileQuery = trimmedLower.includes('which image') || trimmedLower.includes('what image') || trimmedLower.includes('which file') || trimmedLower.includes('uploaded') || trimmedLower.includes('pasted') || trimmedLower.includes('my document');
+    const isNameQuery = trimmedLower.includes('who are you') || trimmedLower.includes('your name') || trimmedLower.includes('what are you');
+    const isGreeting = /^(hi|hello|hey|good morning|good afternoon|good evening)\b/i.test(trimmedLower);
+    const isCapabilityQuery = trimmedLower.includes('what can you do') || trimmedLower.includes('how do you work') || trimmedLower === 'help';
+    const isThanksQuery = trimmedLower.includes('thank') || trimmedLower.includes('bye');
 
-    const isFileQuery = trimmedLower.includes('which image') || trimmedLower.includes('what image') || trimmedLower.includes('which file') || trimmedLower.includes('uploaded') || trimmedLower.includes('pasted') || trimmedLower.includes('my document') || trimmedLower.includes('capture') || trimmedLower.includes('examine') || trimmedLower.includes('summary of that file') || trimmedLower.includes('ಫೈಲ್') || trimmedLower.includes('ದಾಖಲೆ');
-    const isNameQuery = trimmedLower.includes('name') || trimmedLower.includes('who are you') || trimmedLower.includes('who created') || trimmedLower.includes('ನೀವು ಯಾರು');
-    const isGreeting = ['hello', 'hi', 'hey', 'greetings', 'namaste', 'नमस्ते', 'हेलो', 'हाय'].some((g) => trimmedLower.includes(g));
-    const isCapabilityQuery = trimmedLower.includes('what can you do') || trimmedLower.includes('help') || trimmedLower.includes('how do you work') || trimmedLower.includes('ಏನು ಮಾಡಬಹುದು');
-    const isThanksQuery = trimmedLower.includes('thank') || trimmedLower.includes('thanks') || trimmedLower.includes('bye') || trimmedLower.includes('ಧನ್ಯವಾದ');
-    const isGeneralKnowledge =
-      trimmedLower.includes('sky is blue') ||
-      trimmedLower.includes('why is the sky') ||
-      trimmedLower.includes('joke') ||
-      trimmedLower.includes('weather') ||
-      (qTokens.length === 0 && !['rent', 'lease', 'deposit', 'notice', 'clause', 'penalty', 'pay', 'term', 'bond', 'ಬಾಡಿಗೆ', 'ಠೇವಣಿ', 'ಸೂಚನೆ'].some(k => trimmedLower.includes(k)));
+    const rawTextPool = (
+      (document?.clauses || []).map((c) => c.original_text).join(' ') +
+      ' ' +
+      (inputContext?.extractedInputText || '') +
+      ' ' +
+      (inputContext?.pastedText || '') +
+      ' ' +
+      (inputContext?.docAText || '') +
+      ' ' +
+      (inputContext?.docBText || '')
+    ).toLowerCase();
 
     if (isFileQuery && (inputContext?.extractedInputText || inputContext?.pastedText)) {
-      const srcText = inputContext.extractedInputText || inputContext.pastedText;
-      const fileName = inputContext.uploadedFileName ? `**${inputContext.uploadedFileName}**` : (isKannada ? 'ನಿಮ್ಮ ದಾಖಲೆ' : 'your input document');
-      textResponse = isKannada
-        ? `${fileName} ಸಾರಾಂಶ ಇಲ್ಲಿದೆ:\n\n• **ಪಠ್ಯದ ಪೂರ್ವವೀಕ್ಷಣೆ**: "${srcText.slice(0, 350)}${srcText.length > 350 ? '...' : ''}"\n\nನಿಮ್ಮ ಫೈಲ್ ದಾಖಲೆ ವಿಭಾಗದಲ್ಲಿ ಆಯ್ಕೆಯಾಗಿದೆ. ಸಂಪೂರ್ಣ AI ವಿಶ್ಲೇಷಣೆ ಮತ್ತು ಅಪಾಯ ಗುರುತಿಸುವಿಕೆಗಾಗಿ **"Analyze Document"** ಕ್ಲಿಕ್ ಮಾಡಿ!`
-        : `Here is a summary of ${fileName}:\n\n• **Extracted Content Preview**: "${srcText.slice(0, 350)}${srcText.length > 350 ? '...' : ''}"\n\nYour file is selected in the Document Capture section. Click **"Analyze Document"** to run full 4-stage AI clause simplification and risk tagging!`;
+      const srcText = (inputContext.extractedInputText || inputContext.pastedText).replace(/\s+/g, ' ').trim();
+      const fileName = inputContext.uploadedFileName || 'your circular text';
+      textResponse = enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `You uploaded ${fileName}, and ${srcText.length} characters of circular text are ready.`,
+          `Preview: "${srcText.slice(0, 120)}"`,
+          `Click Analyze Circular to see simple section explanations or ask a specific question here.`,
+        ],
+      });
       citedClauseIds.length = 0;
     } else if (isFileQuery && inputContext?.uploadedFileName) {
-      textResponse = isKannada
-        ? `ನೀವು **${inputContext.uploadedFileName}** ಅನ್ನು ದಾಖಲೆ ಅಪ್‌ಲೋಡ್ ವಿಭಾಗದಲ್ಲಿ ಸೇರಿಸಿದ್ದೀರಿ! 📄 ಇದು ವಿಶ್ಲೇಷಣೆಗೆ ಸಿದ್ಧವಾಗಿದೆ. ಸಂಪೂರ್ಣ ವಿಶ್ಲೇಷಣೆ ನೋಡಲು "Analyze Document" ಕ್ಲಿಕ್ ಮಾಡಿ!`
-        : `You have uploaded **${inputContext.uploadedFileName}** (${inputContext.uploadedFileSize || 'File'}, ${inputContext.uploadedFileType || 'Format'}) in the Document Capture section! 📄 It is currently selected and ready for analysis. Click "Analyze Document" to view full clause simplifications and risk tagging!`;
+      textResponse = enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `Your file "${inputContext.uploadedFileName}" is selected for checking.`,
+          `Click Analyze Circular to extract sections, benefits, and deadlines.`,
+          `Once analyzed, ask any question about eligibility, dates, or required documents.`,
+        ],
+      });
       citedClauseIds.length = 0;
-    } else if (isNameQuery) {
-      textResponse = isKannada
-        ? `ನಾನು LegalLens AI, ನಿಮ್ಮ ಕಾನೂನು ಸಹಾಯಕ! ⚖️ ಕಾನೂನು ಒಪ್ಪಂದಗಳನ್ನು ಸರಳವಾಗಿ ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು, ಅಡಗಿರುವ ಆರ್ಥಿಕ ಅಪಾಯಗಳನ್ನು ಗುರುತಿಸಲು, ಒಪ್ಪಂದಗಳನ್ನು ಹೋಲಿಸಲು ಮತ್ತು ಉಚಿತ ಕಾನೂನು ನೆರವು (NALSA 15100) ಹುಡುಕಲು ಸಹಾಯ ಮಾಡುತ್ತೇನೆ.`
-        : `I am LegalLens AI, your GenAI Legal Partner! ⚖️ I help you understand legal agreements in simple everyday language, flag hidden financial risks, compare contracts side-by-side, and find free Legal Aid (NALSA 15100) support.`;
-      citedClauseIds.length = 0;
-    } else if (isGreeting) {
-      textResponse = isKannada
-        ? `ನಮಸ್ಕಾರ! 👋 ನಾನು ನಿಮ್ಮ LegalLens AI ಸಹಾಯಕ. ನೀವು ಯಾವುದೇ ಪ್ರಶ್ನೆ ಕೇಳಬಹುದು ಅಥವಾ ವಿಶ್ಲೇಷಣೆಗಾಗಿ ನಿಮ್ಮ ಒಪ್ಪಂದವನ್ನು ಅಪ್‌ಲೋಡ್ ಮಾಡಬಹುದು!`
-        : `Hello! 👋 I am your LegalLens AI Assistant powered by Groq & Gemini. You can ask me any question or upload a contract to analyze!`;
+    } else if (isNameQuery || isGreeting) {
+      textResponse = enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `I am GovScheme Diff AI, your plain-English guide for government scheme circulars.`,
+          document
+            ? `Right now I can answer questions grounded in "${docTitle}".`
+            : `Upload or paste a government scheme circular to check eligibility, benefits, and dates.`,
+          `Every answer uses simple everyday words and cites page and section numbers when available.`,
+        ],
+      });
       citedClauseIds.length = 0;
     } else if (isCapabilityQuery) {
-      textResponse = isKannada
-        ? `ನಾನು ಈ ರೀತಿಯಲ್ಲಿ ಸಹಾಯ ಮಾಡಬಹುದು:\n\n• **ಸಾಮಾನ್ಯ AI ಪ್ರಶ್ನೋತ್ತರ**: ಸರಳ ಭಾಷೆಯಲ್ಲಿ ಕಾನೂನು ಪ್ರಶ್ನೆಗಳಿಗೆ ಉತ್ತರಿಸುವುದು.\n• **ಷರತ್ತುಗಳ ಸರಳ ವಿವರಣೆ**: ಕಠಿಣ ಕಾನೂನು ಪದಗಳನ್ನು ಸುಲಭ ಭಾಷೆಯಲ್ಲಿ ವಿವರಿಸುವುದು.\n• **ಅಪಾಯ ಗುರುತಿಸುವಿಕೆ**: ಅಡಗಿರುವ ದಂಡಗಳು ಅಥವಾ ಹೆಚ್ಚಿನ ಅಪಾಯದ ಷರತ್ತುಗಳನ್ನು ಸೂಚಿಸುವುದು.\n• **ಒಪ್ಪಂದ ಹೋಲಿಕೆ**: ಎರಡು ಬಾಡಿಗೆ ಅಥವಾ ಉದ್ಯೋಗ ಒಪ್ಪಂದಗಳನ್ನು ಹೋಲಿಸುವುದು.\n• **ಕಾನೂನು ನೆರವು**: ಹತ್ತಿರದ ಉಚಿತ NALSA (15100) ಕಾನೂನು ನೆರವು ಕೇಂದ್ರವನ್ನು ಹುಡುಕುವುದು.`
-        : `Here is what I can do for you:\n\n• **General AI Q&A**: Answer general questions using high-speed LLMs.\n• **Clause Simplification**: Translate complex legal jargon into plain, everyday language.\n• **Risk Tagging**: Flag hidden penalties or high-risk terms with visual traffic-light indicators.\n• **Contract Comparison**: Compare two lease or employment counter-offers side-by-side.\n• **Action Checklists**: Export key deadlines directly to your calendar.\n• **Legal Aid Locator**: Find toll-free NALSA (15100) legal aid offices near you.`;
+      textResponse = enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `I explain government orders, scheme circulars, and guidelines in simple everyday English.`,
+          `I compare two circular versions to highlight changes in eligibility, money limits, benefits, documents, and deadlines.`,
+          `I answer questions using only the uploaded circular and tell you clearly if information is missing.`,
+        ],
+      });
       citedClauseIds.length = 0;
     } else if (isThanksQuery) {
-      textResponse = isKannada
-        ? `ಸ್ವಾಗತ! ನಿಮಗೆ ಬೇಕಾದಾಗ ಯಾವುದೇ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ.`
-        : `You're very welcome! Feel free to ask any other questions whenever you need.`;
+      textResponse = enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `You are welcome! Happy to help you read government circulars clearly.`,
+          document
+            ? `You can ask more questions anytime about "${docTitle}".`
+            : `Upload another circular whenever you want to check eligibility or policy changes.`,
+          `Always verify final submission dates on the official department portal.`,
+        ],
+      });
       citedClauseIds.length = 0;
-    } else if (isGeneralKnowledge) {
-      textResponse = isKannada
-        ? `ನಾನು ಸಾಮಾನ್ಯ ಮತ್ತು ಕಾನೂನು ಸಂಬಂಧಿತ ಪ್ರಶ್ನೆಗಳಿಗೆ ಉತ್ತರಿಸಬಹುದು. ಒಪ್ಪಂದ, ಠೇವಣಿ ಮರುಪಾವತಿ, ಸೂಚನಾ ಅವಧಿ ಇತ್ಯಾದಿಗಳ ಬಗ್ಗೆ ಕೇಳಿ.`
-        : `I can answer general questions as well as legal questions! Feel free to ask about contracts, deposit returns, notice periods, or general topics.`;
-      citedClauseIds.length = 0;
-    } else {
-      const matchingClauses = (document?.clauses || []).filter((c: SimplifiedClause) => citedClauseIds.includes(c.id));
-      if (matchingClauses.length > 0) {
-        textResponse = isKannada
-          ? `ನಿಮ್ಮ ಒಪ್ಪಂದ (${docTitle}) ಆಧರಿಸಿ:\n\n` +
-          matchingClauses.map((c: SimplifiedClause) => `• **${c.title}**: ${c.simple_explanation}`).join('\n\n') +
-          `\n\n*ಪರಿಣಾಮ:* ${matchingClauses[0].one_line_consequence}`
-          : `Based on your contract (${docTitle}):\n\n` +
-          matchingClauses.map((c: SimplifiedClause) => `• **${c.title}**: ${c.simple_explanation}`).join('\n\n') +
-          `\n\n*Consequence:* ${matchingClauses[0].one_line_consequence}`;
-      } else {
-        textResponse = document
-          ? (isKannada
-            ? `ನಿಮ್ಮ ದಾಖಲೆ "${docTitle}" ಅನ್ನು ಪರಿಶೀಲಿಸಿದ್ದೇನೆ. ಆ ಪ್ರಶ್ನೆಗೆ ಸಂಬಂಧಿಸಿದ ವಿವರವಾದ ಷರತ್ತುಗಳು ದಾಖಲೆಯಲ್ಲಿ ಇಲ್ಲ. ಸಂಬಂಧಿತ ಅಧಿಕಾರಿ ಅಥವಾ ಕಾನೂನು ಸಲಹೆಗಾರರೊಂದಿಗೆ ಪರಿಶೀಲಿಸಲು ಶಿಫಾರಸು ಮಾಡುತ್ತೇವೆ.`
-            : `I reviewed your document "${docTitle}". The contract does not explicitly detail terms for that query. We recommend checking with your landlord/employer or a legal advisor.`)
-          : inputContext?.uploadedFileName
-            ? (isKannada
-              ? `ನೀವು ದಾಖಲೆ ವಿಭಾಗದಲ್ಲಿ **${inputContext.uploadedFileName}** ಅಪ್‌ಲೋಡ್ ಮಾಡಿದ್ದೀರಿ. ಇದು ವಿಶ್ಲೇಷಣೆಗೆ ಸಿದ್ಧವಾಗಿದೆ!`
-              : `You have uploaded **${inputContext.uploadedFileName}** in Document Capture. It is selected and ready for analysis!`)
-            : (isKannada
-              ? `ನಮಸ್ಕಾರ! ನಾನು ನಿಮ್ಮ LegalLens AI ಸಹಾಯಕ. ಪ್ರಾರಂಭಿಸಲು ಯಾವುದೇ ಪ್ರಶ್ನೆ ಕೇಳಿ ಅಥವಾ ದಾಖಲೆಯನ್ನು ಅಪ್‌ಲೋಡ್ ಮಾಡಿ!`
-              : `Hello! I am your LegalLens AI Assistant. Please ask any question or upload a document to get started.`);
-        citedClauseIds.length = 0;
-      }
-    }
-  }
+    } else if (inputContext?.isComparisonMode && (inputContext?.docAText || inputContext?.docBText)) {
+      const cmp = inputContext.comparisonResult;
+      const aHit = inputContext.docAText && qTokens.some((t) => inputContext.docAText.toLowerCase().includes(t));
+      const bHit = inputContext.docBText && qTokens.some((t) => inputContext.docBText.toLowerCase().includes(t));
 
-  function sanitizeResponseLanguage(text: string, isKannada: boolean): string {
-    if (!text) return text;
-    if (isKannada) {
-      return text
-        .replace(/^Hello!\s*👋\s*/i, 'ನಮಸ್ಕಾರ! 👋 ')
-        .replace(/^Hello!\s*/i, 'ನಮಸ್ಕಾರ! ')
-        .replace(/^Hi!\s*/i, 'ನಮಸ್ಕಾರ! ')
-        .replace(/How can I help you today\?\s*/gi, 'ಇಂದು ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು? ')
-        .replace(/If you have a contract or legal question, just let me know and I'll walk you through it\./gi, 'ನಿಮಗೆ ಒಪ್ಪಂದ ಅಥವಾ ಕಾನೂನು ಸಂಬಂಧಿತ ಪ್ರಶ್ನೆ ಇದ್ದರೆ ತಿಳಿಸಿ; ವಿವರವಾಗಿ ಸಹಾಯ ಮಾಡುತ್ತೇನೆ.')
-        .replace(/If you have a specific contract you'd like to review or a particular clause you're unsure about, feel free to share it and I can walk you through the details!/gi, 'ಪರಿಶೀಲನೆಗೆ ನಿರ್ದಿಷ್ಟ ಒಪ್ಪಂದವಿದ್ದರೆ ಅಥವಾ ಯಾವುದಾದರೂ ಷರತ್ತಿನ ಬಗ್ಗೆ ಅನುಮಾನವಿದ್ದರೆ ಹಂಚಿಕೊಳ್ಳಿ; ವಿವರವಾಗಿ ವಿವರಿಸುತ್ತೇನೆ!');
+      if (!aHit && !bHit && qTokens.length > 0) {
+        isMissingInfoFallback = true;
+        textResponse = enforceThreePointCitizenAnswer('', {
+          isMissingInfo: true,
+          fallbackPoints: [
+            `This information is not mentioned in the uploaded circular.`,
+            `Comparison summary: ${cmp?.added_count ?? 0} added, ${cmp?.modified_count ?? 0} modified, and ${cmp?.removed_count ?? 0} removed section(s).`,
+            `Ask about specific headings visible in Circular A or Circular B.`,
+          ],
+        });
+      } else {
+        const aSnippet = aHit ? inputContext.docAText.replace(/\s+/g, ' ').trim().slice(0, 140) : 'Not mentioned in Circular A';
+        const bSnippet = bHit ? inputContext.docBText.replace(/\s+/g, ' ').trim().slice(0, 140) : 'Not mentioned in Circular B';
+        textResponse = enforceThreePointCitizenAnswer('', {
+          fallbackPoints: [
+            `[Circular A] says: ${aSnippet}.`,
+            `[Circular B] says: ${bSnippet}.`,
+            cmp ? `Overall diff: ${cmp.added_count ?? 0} added, ${cmp.modified_count ?? 0} changed, ${cmp.removed_count ?? 0} removed.` : `Check the side-by-side cards above for exact changed wording.`,
+          ],
+        });
+      }
+      citedClauseIds.length = 0;
+    } else if (matchedClauses.length > 0) {
+      const top = matchedClauses[0];
+      const topCit = formatCircularCitation(top);
+      const snippet = top.original_text.replace(/\s+/g, ' ').trim().slice(0, 160);
+      const secondCit = matchedClauses[1] ? formatCircularCitation(matchedClauses[1]) : '';
+      textResponse = enforceThreePointCitizenAnswer('', {
+        citation: topCit,
+        fallbackPoints: [
+          `According to ${top.title} ${topCit}: ${snippet}.`,
+          `In simple words: ${top.one_line_consequence.replace(/^(Important|Check Carefully|Standard Info):\s*/i, '')}`,
+          matchedClauses[1]
+            ? `Also check related section "${matchedClauses[1].title}" ${secondCit}.`
+            : `Verify full details on the official portal using reference ${topCit || top.title}.`,
+        ],
+      });
+    } else if (document || rawTextPool.trim().length > 0) {
+      isMissingInfoFallback = true;
+      citedClauseIds.length = 0;
+      textResponse = enforceThreePointCitizenAnswer('', {
+        isMissingInfo: true,
+        citation: primaryCitation,
+        fallbackPoints: [
+          `This information is not mentioned in the uploaded circular.`,
+          document
+            ? `Reviewed "${docTitle}" (${(document.clauses || []).length} extracted sections), and no matching rule was found.`
+            : `Checked the uploaded circular text, and no matching detail was found.`,
+          `Confirm this detail on the official scheme portal or citizen helpdesk.`,
+        ],
+      });
     } else {
-      return text
-        .replace(/^ನಮಸ್ಕಾರ!\s*👋\s*/i, 'Hello! 👋 ')
-        .replace(/^ನಮಸ್ಕಾರ!\s*/i, 'Hello! ')
-        .replace(/ಇಂದು ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು\?\s*/gi, 'How can I help you today? ');
+      textResponse = enforceThreePointCitizenAnswer('', {
+        fallbackPoints: [
+          `No government circular is uploaded or analyzed yet.`,
+          `Upload a circular PDF, photo, or pasted text to check eligibility, benefits, and deadlines.`,
+          `You can also open Scheme Portals & Helpdesks to visit official government portals.`,
+        ],
+      });
+      citedClauseIds.length = 0;
     }
+  } else {
+    // Enforce exact 3-point simple everyday English formatting on live LLM answers too
+    textResponse = enforceThreePointCitizenAnswer(textResponse, {
+      citation: primaryCitation,
+      isMissingInfo: /not mentioned in the uploaded circular/i.test(textResponse),
+    });
   }
 
   return {
     id: `msg_ans_${Date.now()}`,
     sender: 'assistant',
-    text: postProcessCleanResponseText(sanitizeResponseLanguage(textResponse, isKannada)),
-    cited_clause_ids: citedClauseIds.length > 0 ? citedClauseIds : undefined,
+    text: postProcessCleanResponseText(textResponse),
+    cited_clause_ids: citedClauseIds.length > 0 && !isMissingInfoFallback ? citedClauseIds : undefined,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     quota: getQuotaStatus(),
   };

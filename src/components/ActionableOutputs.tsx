@@ -142,16 +142,12 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
 
   const handleExportCalendarICS = () => {
     const items = document?.checklist?.items || [];
-    const docTitle = document?.document_title || (language === 'hi' ? 'कानूनी दस्तावेज़' : 'Legal Agreement');
+    const docTitle = document?.document_title || 'Government Scheme Circular';
 
     const { icsContent, exportCount } = buildICalCalendarContent(items, docTitle, language);
 
     if (exportCount === 0 || !icsContent) {
-      alert(
-        language === 'hi'
-          ? 'कैलेंडर में निर्यात करने के लिए कोई विशिष्ट समय सीमा नहीं मिली।'
-          : 'No specific deadline dates or timeframes found in this checklist to export to your calendar.'
-      );
+      alert('No specific deadline dates or timeframes found in this circular checklist to export to your calendar.');
       return;
     }
 
@@ -168,34 +164,27 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
   const handlePrintLawyerBrief = () => {
     if (!document) return;
 
-    const isHi = language === 'hi';
-    const docTitle = document.document_title || (isHi ? 'कानूनी दस्तावेज़' : 'Legal Agreement');
-    const riskScore = document.overall_risk_score ?? 0;
-    const riskBadgeClass = riskScore > 60 ? 'risk-high' : riskScore > 30 ? 'risk-medium' : 'risk-low';
-    const riskText = isHi
-      ? (riskScore > 60 ? `उच्च जोखिम (${riskScore}/100)` : riskScore > 30 ? `मध्यम जोखिम (${riskScore}/100)` : `कम जोखिम (${riskScore}/100)`)
-      : (riskScore > 60 ? `High Risk (${riskScore}/100)` : riskScore > 30 ? `Medium Risk (${riskScore}/100)` : `Low Risk (${riskScore}/100)`);
+    const docTitle = document.document_title || 'Government Scheme Circular';
+    const sectionCount = (document.clauses || []).length;
 
     const summaryText = document.lawyer_briefing?.document_summary || document.summary_simple || '';
     const allFlagged = document.lawyer_briefing?.flagged_issues || [];
     const questions = document.lawyer_briefing?.questions_to_ask_lawyer || [];
     const missingClauses = document.lawyer_briefing?.missing_protective_clauses || [];
     const disclaimerText = document.lawyer_briefing?.disclaimer || document.disclaimer ||
-      (isHi
-        ? 'लीगललेंस एक एआई सहायता उपकरण है, कानून फर्म नहीं। यह ब्रीफिंग पैकेट केवल आपके अधिवक्ता के साथ परामर्श की तैयारी हेतु बनाया गया है।'
-        : 'GovScheme Diff provides AI-assisted explanations of scheme circulars for informational purposes. Verify details with the official issuing authority.');
+      'GovScheme Diff explains government scheme circulars in plain English. Always verify final rules with the issuing department.';
 
-    const dateStr = new Date().toLocaleDateString(isHi ? 'hi-IN' : 'en-US', {
+    const dateStr = new Date().toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
     });
 
     const htmlContent = `<!DOCTYPE html>
-<html lang="${isHi ? 'hi' : 'en'}">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>${docTitle.replace(/\s+/g, '_')}_Lawyer_Briefing_Packet</title>
+  <title>${docTitle.replace(/\s+/g, '_')}_Citizen_Briefing_Packet</title>
   <style>
     @page {
       size: A4 portrait;
@@ -377,74 +366,74 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
 <body>
   <div class="header">
     <div>
-      <div class="brand">GovScheme Diff <span>Briefing</span></div>
-      <div class="brand-sub">${isHi ? 'अधिवक्ता परामर्श दस्तावेज़' : 'Advocate Consultation Packet'}</div>
+      <div class="brand">GovScheme Diff <span>Citizen Briefing</span></div>
+      <div class="brand-sub">Plain-English Scheme Reference Packet</div>
     </div>
     <div class="doc-meta">
       <div class="doc-title">${docTitle}</div>
       <div class="date-stamp">${dateStr}</div>
-      <div class="risk-badge ${riskBadgeClass}">${riskText}</div>
+      <div class="risk-badge risk-low">${sectionCount} Sections Extracted</div>
     </div>
   </div>
 
   ${summaryText ? `
   <div class="summary-box">
-    <div class="summary-title">${isHi ? 'दस्तावेज़ का संक्षिप्त सारांश' : 'Executive Document Summary'}</div>
+    <div class="summary-title">Circular Overview</div>
     <p class="summary-text">${summaryText}</p>
   </div>
   ` : ''}
 
   <div class="section">
-    <div class="section-title title-red">${isHi ? 'चिह्नित उच्च-जोखिम के मुद्दे' : 'Flagged High-Risk Issues'} (${allFlagged.length})</div>
+    <div class="section-title title-red">Important Exclusions &amp; Strict Conditions (${allFlagged.length})</div>
     ${allFlagged.length > 0 ? allFlagged.map((issue) => `
       <div class="issue-card">
-        <div class="issue-title">⚠️ ${issue.clause_title}</div>
+        <div class="issue-title">Important: ${issue.clause_title}</div>
         <div class="issue-concern">${issue.concern}</div>
-        ${issue.suggested_clause_edit ? `<div class="issue-edit">${isHi ? 'अनुशंसित संशोधन' : 'Suggested Edit'}: ${issue.suggested_clause_edit}</div>` : ''}
+        ${issue.suggested_clause_edit ? `<div class="issue-edit">Helpdesk Check: ${issue.suggested_clause_edit}</div>` : ''}
       </div>
     `).join('') : `
       <div class="list-box">
         <div class="empty-note">
-          ${isHi ? 'इस समझौते में कोई उच्च-जोखिम वाला मुद्दा नहीं पाया गया।' : 'No high-risk issues flagged in this circular.'}
+          No strict exclusions or disqualification traps flagged in this circular.
         </div>
       </div>
     `}
   </div>
 
   <div class="section">
-    <div class="section-title title-orange">${isHi ? 'आपके अधिवक्ता से पूछने के लिए तैयार प्रश्न' : 'Ready-to-Ask Questions for Your Advocate'} (${questions.length})</div>
+    <div class="section-title title-orange">Questions for the Scheme Helpdesk / Block Officer (${questions.length})</div>
     <div class="list-box">
       ${questions.length > 0 ? questions.map((q) => `
         <div class="list-item">
-          <span class="bullet">❓</span>
+          <span class="bullet">•</span>
           <span class="item-text">${q}</span>
         </div>
       `).join('') : `
         <div class="empty-note">
-          ${isHi ? 'कोई विशिष्ट प्रश्न आवश्यक नहीं हैं — यह समझौता स्पष्ट प्रतीत होता है।' : 'No specific questions flagged for this circular.'}
+          No extra clarification questions flagged — verify dates and portal steps before applying.
         </div>
       `}
     </div>
   </div>
 
   <div class="section">
-    <div class="section-title title-gray">${isHi ? 'गायब सुरक्षात्मक धाराएं' : 'Missing Protective Clauses'} (${missingClauses.length})</div>
+    <div class="section-title title-gray">Missing Scheme Details to Double-Check (${missingClauses.length})</div>
     <div class="list-box">
       ${missingClauses.length > 0 ? missingClauses.map((m) => `
         <div class="list-item">
-          <span class="bullet">📄</span>
+          <span class="bullet">•</span>
           <span class="item-text">${m}</span>
         </div>
       `).join('') : `
         <div class="empty-note">
-          ${isHi ? 'इस दस्तावेज़ में कोई महत्वपूर्ण सुरक्षात्मक धाराएँ गायब नहीं मिलीं।' : 'No missing protective clauses detected for this document.'}
+          No major missing scheme sections detected in this circular.
         </div>
       `}
     </div>
   </div>
 
   <div class="footer">
-    <div>GovScheme Diff • ${isHi ? 'अधिवक्ता ब्रीफिंग पैकेट' : 'Circular Briefing Packet'} • ${dateStr}</div>
+    <div>GovScheme Diff • Citizen Scheme Briefing • ${dateStr}</div>
     <div style="margin-top: 4px;">${disclaimerText}</div>
   </div>
 </body>
@@ -532,9 +521,7 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
             <div>
               <h3 className="text-xs font-bold text-[#1E1B17]">{document?.checklist?.title || t('outputs.tab_checklist')}</h3>
               <p className="text-[11px] text-[#6E6659] mt-0.5">
-                {document?.checklist?.stamp_duty_required
-                  ? `Stamp Duty Note: ${document?.checklist?.stamp_duty_note || 'Stamp paper required'}`
-                  : 'No special stamp paper requirements detected.'}
+                {document?.checklist?.stamp_duty_note || 'Keep valid ID proof and income/residence certificates ready before applying.'}
               </p>
             </div>
 
@@ -679,9 +666,7 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
             )
           ) : (
             <div className="p-4 bg-[#F6F1E7] border border-[#E7E1D3] rounded-xl text-xs text-[#6E6659] text-center font-medium">
-              {language === 'hi'
-                ? 'इस दस्तावेज़ के लिए कोई विशिष्ट कार्रवाई सूची आइटम नहीं मिले।'
-                : 'No specific action checklist items required for this document.'}
+              No specific action checklist items required for this circular.
             </div>
           )}
         </div>
@@ -827,21 +812,19 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
             )
           ) : (
             <div className="p-4 bg-[#F6F1E7] border border-[#E7E1D3] rounded-xl text-xs text-[#6E6659] text-center font-medium">
-              {language === 'hi'
-                ? 'इस दस्तावेज़ के लिए कोई अतिरिक्त बातचीत विकल्प आवश्यक नहीं हैं।'
-                : 'No additional negotiation options required for this straightforward document.'}
+              No additional next steps required for this circular.
             </div>
           )}
         </div>
       )}
 
-      {/* Tab 3: Lawyer-Briefing Packet */}
+      {/* Tab 3: Citizen Scheme Briefing Packet */}
       {activeTab === 'lawyer_brief' && (
         <div className="space-y-5 print:text-black">
           <div className="flex items-center justify-between border-b border-[#E7E1D3] pb-3">
             <div>
-              <h3 className="text-sm font-bold font-heading text-[#1E1B17]">Lawyer Briefing Packet</h3>
-              <p className="text-xs text-[#6E6659]">Prepare for a legal professional with ready-to-ask questions</p>
+              <h3 className="text-sm font-bold font-heading text-[#1E1B17]">Citizen Scheme Briefing</h3>
+              <p className="text-xs text-[#6E6659]">Printable summary of key restrictions, helpdesk questions, and missing details</p>
             </div>
 
             <button
@@ -850,15 +833,15 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
               className="flex items-center space-x-1.5 px-3 py-1.5 bg-[#F6F1E7] hover:bg-[#E7E1D3]/50 text-[#1E1B17] text-xs font-semibold rounded border border-[#E7E1D3] transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5 text-[#B85C38]" />
-              <span>Print Packet</span>
+              <span>Print Briefing</span>
             </button>
           </div>
 
-          {/* Flagged Issues with Card Deck View Navigation */}
+          {/* Highlighted Conditions Deck */}
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 className="text-xs font-bold uppercase text-[#991B1B] tracking-wider">
-                Flagged High-Risk Issues ({totalFlaggedIssues})
+                Important Exclusions & Strict Conditions ({totalFlaggedIssues})
               </h4>
 
               {totalFlaggedIssues > 1 && (
@@ -970,18 +953,16 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
               <div className="p-3.5 bg-[#F6F1E7] border border-[#E7E1D3] rounded-xl text-xs text-[#065F46] font-medium flex items-center space-x-2">
                 <CheckCircle2 className="w-4 h-4 text-[#065F46] shrink-0" />
                 <span>
-                  {language === 'hi'
-                    ? 'इस समझौते में कोई उच्च-जोखिम वाला मुद्दा नहीं पाया गया। सभी विश्लेषित धाराएं मानक स्वीकार्य सीमा में हैं।'
-                    : 'No high-risk issues flagged in this circular. All analyzed sections fall within standard acceptable risk levels.'}
+                  No strict exclusion or disqualification conditions flagged in this circular.
                 </span>
               </div>
             )}
           </div>
 
-          {/* Ready to Ask Questions */}
+          {/* Helpdesk Questions */}
           <div className="space-y-3">
             <h4 className="text-xs font-bold uppercase text-[#B85C38] tracking-wider">
-              Ready-to-Ask Questions for Your Advocate
+              Questions for the Scheme Helpdesk / Block Officer
             </h4>
             <div className="bg-[#F6F1E7] p-4 rounded-xl border border-[#E7E1D3] space-y-2 text-xs text-[#1E1B17]">
               {(document?.lawyer_briefing?.questions_to_ask_lawyer || []).length > 0 ? (
@@ -995,19 +976,17 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
                 <div className="flex items-start space-x-2.5 text-[#6E6659]">
                   <HelpCircle className="w-4 h-4 text-[#B85C38] shrink-0 mt-0.5" />
                   <p className="leading-relaxed">
-                    {language === 'hi'
-                      ? 'कोई विशिष्ट प्रश्न आवश्यक नहीं हैं — यह समझौता स्पष्ट प्रतीत होता है। यदि कुछ भी अस्पष्ट है, तो अपने वकील से मुख्य शर्तों पर चर्चा करने के लिए कहें।'
-                      : 'No specific questions flagged — this circular appears straightforward. If anything is unclear, verify the details with the issuing authority.'}
+                    No extra clarification questions flagged — verify dates and portal steps with the issuing department before applying.
                   </p>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Missing Protective Clauses */}
+          {/* Missing Scheme Details */}
           <div className="space-y-3">
             <h4 className="text-xs font-bold uppercase text-[#6E6659] tracking-wider">
-              Missing Protective Clauses
+              Missing Scheme Details to Double-Check
             </h4>
             <div className="bg-[#F6F1E7] p-4 rounded-xl border border-[#E7E1D3] space-y-2 text-xs text-[#1E1B17]">
               {(document?.lawyer_briefing?.missing_protective_clauses || []).length > 0 ? (
@@ -1021,9 +1000,7 @@ export const ActionableOutputs: React.FC<ActionableOutputsProps> = ({ document }
                 <div className="flex items-start space-x-2.5 text-[#065F46]">
                   <FileCheck className="w-4 h-4 text-[#065F46] shrink-0 mt-0.5" />
                   <p className="font-medium text-xs leading-relaxed">
-                    {language === 'hi'
-                      ? 'इस दस्तावेज़ में कोई महत्वपूर्ण सुरक्षात्मक धाराएँ गायब नहीं मिलीं। मानक सुरक्षात्मक प्रावधान मौजूद हैं।'
-                      : 'No missing protective clauses detected for this document. Standard protective provisions are present.'}
+                    Core scheme sections (eligibility, benefits, documents, and timelines) were checked without missing critical notices.
                   </p>
                 </div>
               )}

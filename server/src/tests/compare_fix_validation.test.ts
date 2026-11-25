@@ -1,259 +1,318 @@
 import fs from 'fs';
 import path from 'path';
-import {
-  alignClauses,
-} from '../../../src/utils/clauseAlignment';
-import {
-  compareTwoDocuments,
-  calculateDocumentOverallRiskScore,
-  analyzeDocumentText,
-} from '../services/astraBackend';
+import { alignClauses } from '../../../src/utils/clauseAlignment';
+import { compareTwoDocuments, analyzeDocumentText } from '../services/astraBackend';
 import { DocumentAnalysisResult, SimplifiedClause } from '../../../src/types/schemas';
 
 async function runCompareFixValidationTestSuite() {
   console.log('====================================================');
-  console.log('  COMPARE CONTRACTS PIPELINE & FIX VALIDATION TEST');
+  console.log('  PHASE 3: DETERMINISTIC CIRCULAR COMPARISON TESTS');
   console.log('====================================================\n');
 
-  // TEST 1: Risk Score Reuse & Calculation Consistency
-  console.log('--- TEST 1: RISK SCORE REUSE & SINGLE SOURCE OF TRUTH ---');
-  const dummyClauses: SimplifiedClause[] = [
+  // TEST 1: Added, Removed, Modified, Unchanged + All 6 Policy Field Change Detectors
+  console.log('--- TEST 1: ADDED / REMOVED / MODIFIED / UNCHANGED & 6 FIELD DETECTORS ---');
+
+  const circularAClauses: SimplifiedClause[] = [
     {
-      id: 'c1',
+      id: 'a1',
       clause_number: '1',
-      title: 'Indemnity Clause',
-      clause_type: 'indemnity & liability',
-      original_text: 'Employee shall indemnify company for all damages.',
-      simple_explanation: 'You must pay for any damages.',
-      very_simple_explanation: 'You pay for damages.',
-      risk_level: 'high',
-      icon_name: 'ShieldAlert',
-      one_line_consequence: 'Unlimited liability exposure.',
+      title: 'Scheme Overview',
+      clause_type: 'scheme overview & objective',
+      page_number: 1,
+      section_reference: 'Section 1',
+      original_text: 'Circular No. SWD/2025/10 provides financial assistance to eligible residents.',
+      simple_explanation: 'Overview',
+      very_simple_explanation: 'Overview',
+      risk_level: 'low',
+      icon_name: 'FileText',
+      one_line_consequence: 'Overview',
     },
     {
-      id: 'c2',
+      id: 'a2',
       clause_number: '2',
-      title: 'Notice Period',
-      clause_type: 'notice period',
-      original_text: 'Either party may terminate with 30 days written notice.',
-      simple_explanation: 'Give 30 days notice to end contract.',
-      very_simple_explanation: '30 days notice required.',
+      title: 'Eligibility, Income & Age Limits',
+      clause_type: 'income & age limits',
+      page_number: 1,
+      section_reference: 'Section 2',
+      original_text:
+        'Applicants must be permanent residents aged 60 to 75 years with annual family income not exceeding Rs. 2,50,000. Only BPL families are eligible.',
+      simple_explanation: 'Eligibility',
+      very_simple_explanation: 'Eligibility',
+      risk_level: 'watch_out',
+      icon_name: 'Clock',
+      one_line_consequence: 'Income & Age limits',
+    },
+    {
+      id: 'a3',
+      clause_number: '3',
+      title: 'Benefits & Required Documents',
+      clause_type: 'benefits & financial assistance',
+      page_number: 1,
+      section_reference: 'Section 3',
+      original_text:
+        'Beneficiaries receive financial assistance of Rs. 2,000 per month. Applicants must submit Aadhaar Card and Income Certificate before 30th September 2026.',
+      simple_explanation: 'Benefits',
+      very_simple_explanation: 'Benefits',
       risk_level: 'low',
-      icon_name: 'ShieldCheck',
-      one_line_consequence: 'Standard notice period.',
+      icon_name: 'CheckCircle',
+      one_line_consequence: 'Benefits',
+    },
+    {
+      id: 'a4',
+      clause_number: '4',
+      title: 'Legacy Physical Verification Camp',
+      clause_type: 'implementation & verification',
+      page_number: 2,
+      section_reference: 'Section 4',
+      original_text: 'Applicants must attend a physical ward verification camp.',
+      simple_explanation: 'Camp verification',
+      very_simple_explanation: 'Camp verification',
+      risk_level: 'low',
+      icon_name: 'FileText',
+      one_line_consequence: 'Camp verification',
     },
   ];
 
-  const scoreFromCalc = calculateDocumentOverallRiskScore(dummyClauses);
-  // 30 + 1 * 25 + 0 = 55
-  if (scoreFromCalc !== 55) {
-    console.error(`❌ [FAIL] Test 1: calculateDocumentOverallRiskScore returned ${scoreFromCalc}, expected 55.`);
-    process.exit(1);
-  }
+  const circularBClauses: SimplifiedClause[] = [
+    {
+      id: 'b1',
+      clause_number: '1',
+      title: 'Scheme Overview',
+      clause_type: 'scheme overview & objective',
+      page_number: 1,
+      section_reference: 'Section 1',
+      original_text: 'Circular No. SWD/2025/10 provides financial assistance to eligible residents.',
+      simple_explanation: 'Overview',
+      very_simple_explanation: 'Overview',
+      risk_level: 'low',
+      icon_name: 'FileText',
+      one_line_consequence: 'Overview',
+    },
+    {
+      id: 'b2',
+      clause_number: '2',
+      title: 'Eligibility, Income & Age Limits',
+      clause_type: 'income & age limits',
+      page_number: 1,
+      section_reference: 'Section 2',
+      original_text:
+        'Applicants must be permanent residents aged 58 to 80 years with annual family income not exceeding Rs. 3,50,000. Both BPL and EWS families are eligible.',
+      simple_explanation: 'Updated eligibility',
+      very_simple_explanation: 'Updated eligibility',
+      risk_level: 'watch_out',
+      icon_name: 'Clock',
+      one_line_consequence: 'Updated limits',
+    },
+    {
+      id: 'b3',
+      clause_number: '3',
+      title: 'Benefits & Required Documents',
+      clause_type: 'benefits & financial assistance',
+      page_number: 1,
+      section_reference: 'Section 3',
+      original_text:
+        'Beneficiaries receive financial assistance of Rs. 3,000 per month. Applicants must submit Aadhaar Card, Income Certificate, and Bank Passbook before 31st December 2026.',
+      simple_explanation: 'Updated benefits',
+      very_simple_explanation: 'Updated benefits',
+      risk_level: 'low',
+      icon_name: 'CheckCircle',
+      one_line_consequence: 'Updated benefits',
+    },
+    {
+      id: 'b4',
+      clause_number: '4',
+      title: 'Grievance Redressal Portal',
+      clause_type: 'grievance & nodal authority',
+      page_number: 2,
+      section_reference: 'Section 4',
+      original_text: 'Applicants may submit grievances online to the District Nodal Officer.',
+      simple_explanation: 'Online grievance',
+      very_simple_explanation: 'Online grievance',
+      risk_level: 'low',
+      icon_name: 'FileText',
+      one_line_consequence: 'Online grievance',
+    },
+  ];
 
   const docAObj: DocumentAnalysisResult = {
-    guard1: { is_legal_document: true, category: 'employment contract', confidence: 0.95 },
-    document_title: 'Employment Agreement A',
-    category: 'employment contract',
-    overall_risk_score: 55,
-    summary_simple: 'Sample doc',
-    summary_very_simple: 'Sample doc',
-    clauses: dummyClauses,
+    guard1: { is_valid_circular: true, document_kind: 'scheme_circular', category: 'welfare & subsidy scheme', confidence: 0.96 },
+    document_title: 'Welfare Assistance Circular 2025',
+    category: 'welfare & subsidy scheme',
+    overall_risk_score: 40,
+    summary_simple: 'Circular A',
+    summary_very_simple: 'Circular A',
+    clauses: circularAClauses,
     contradictions: [],
     checklist: { title: 'Checklist', items: [], stamp_duty_required: false, disclaimer: '' },
     options_next_steps: [],
-    lawyer_briefing: {
-      document_summary: 'Sample summary',
-      flagged_issues: [],
-      questions_to_ask_lawyer: [],
-      missing_protective_clauses: [],
-      recommended_next_steps: ['Review terms with legal counsel'],
-      disclaimer: '',
-    },
+    lawyer_briefing: { document_summary: 'Circular A', flagged_issues: [], questions_to_ask_lawyer: [], missing_protective_clauses: [], recommended_next_steps: [], disclaimer: '' },
     disclaimer: '',
   };
 
   const docBObj: DocumentAnalysisResult = {
-    guard1: { is_legal_document: true, category: 'employment contract', confidence: 0.95 },
-    document_title: 'Employment Agreement B',
-    category: 'employment contract',
-    overall_risk_score: 30,
-    summary_simple: 'Sample doc B',
-    summary_very_simple: 'Sample doc B',
-    clauses: [dummyClauses[1]],
+    guard1: { is_valid_circular: true, document_kind: 'amendment', category: 'welfare & subsidy scheme', confidence: 0.96 },
+    document_title: 'Welfare Assistance Circular 2026 (Amended)',
+    category: 'welfare & subsidy scheme',
+    overall_risk_score: 20,
+    summary_simple: 'Circular B',
+    summary_very_simple: 'Circular B',
+    clauses: circularBClauses,
     contradictions: [],
     checklist: { title: 'Checklist', items: [], stamp_duty_required: false, disclaimer: '' },
     options_next_steps: [],
-    lawyer_briefing: {
-      document_summary: 'Sample summary B',
-      flagged_issues: [],
-      questions_to_ask_lawyer: [],
-      missing_protective_clauses: [],
-      recommended_next_steps: ['Review terms with legal counsel'],
-      disclaimer: '',
-    },
+    lawyer_briefing: { document_summary: 'Circular B', flagged_issues: [], questions_to_ask_lawyer: [], missing_protective_clauses: [], recommended_next_steps: [], disclaimer: '' },
     disclaimer: '',
   };
 
   const compRes = await compareTwoDocuments(docAObj, docBObj);
-  if (!(compRes.winner_recommendation ?? '').includes('30 vs 55')) {
-    console.error(`❌ [FAIL] Test 1: winner_recommendation "${compRes.winner_recommendation}" does not match exact risk scores (30 vs 55).`);
+
+  if (compRes.added_count !== 1 || compRes.removed_count !== 1 || compRes.modified_count !== 2 || compRes.unchanged_count !== 1) {
+    console.error('❌ [FAIL] Test 1a: Diff counts mismatch:', {
+      added: compRes.added_count,
+      removed: compRes.removed_count,
+      modified: compRes.modified_count,
+      unchanged: compRes.unchanged_count,
+    });
     process.exit(1);
-  } else {
-    console.log('✅ [PASS] Test 1: Risk score logic is reused consistently and matches Analyze Document scoring.');
   }
+  console.log('✅ [PASS] Test 1a: Exact Added (1), Removed (1), Modified (2), Unchanged (1) counts computed deterministically.');
 
-  // TEST 2: Low-Overlap Pair (5 Lease clauses vs 5 ToS clauses)
-  console.log('\n--- TEST 2: LOW-OVERLAP PAIR & NO UNDEFINED IN OUTPUT ---');
-  const leaseClauses: SimplifiedClause[] = [
-    { id: 'l0', clause_number: '1', title: 'Equipment Lease Agreement Preamble', clause_type: 'parties & recitals', original_text: 'This agreement sets up a 1-year lease of two CNC machines...', simple_explanation: 'Lease agreement preamble.', very_simple_explanation: 'Lease preamble.', risk_level: 'low', icon_name: 'FileText', one_line_consequence: 'Preamble terms.' },
-    { id: 'l1', clause_number: '2', title: 'Leased Equipment', clause_type: 'use & restrictions', original_text: 'Lessor leases to Lessee two CNC milling machines.', simple_explanation: 'Defines leased equipment.', very_simple_explanation: 'Machine details.', risk_level: 'low', icon_name: 'Briefcase', one_line_consequence: 'Equipment scope.' },
-    { id: 'l2', clause_number: '3', title: 'Lease Term', clause_type: 'term & termination', original_text: 'Term starts Oct 1 2026 for 12 months.', simple_explanation: '12 month duration.', very_simple_explanation: '1 year term.', risk_level: 'low', icon_name: 'Clock', one_line_consequence: 'Term duration.' },
-    { id: 'l3', clause_number: '4', title: 'Rental Payments', clause_type: 'security deposit', original_text: 'Rent is $4,500 per month due on 1st of month.', simple_explanation: '$4500 monthly payment.', very_simple_explanation: '$4500 monthly rent.', risk_level: 'low', icon_name: 'DollarSign', one_line_consequence: 'Rent terms.' },
-    { id: 'l4', clause_number: '5', title: 'Maintenance and Repair', clause_type: 'indemnity & liability', original_text: 'Lessee responsible for routine maintenance and accidental damage.', simple_explanation: 'Lessee pays for repair.', very_simple_explanation: 'You fix damage.', risk_level: 'watch_out', icon_name: 'Wrench', one_line_consequence: 'Maintenance obligation.' },
-  ];
+  if (compRes.winner_recommendation !== undefined || JSON.stringify(compRes).toLowerCase().includes('safer')) {
+    console.error('❌ [FAIL] Test 1b: Found forbidden winner_recommendation or contract safety recommendation:', compRes.winner_recommendation);
+    process.exit(1);
+  }
+  console.log('✅ [PASS] Test 1b: No contract risk score comparison or winner_recommendation emitted.');
 
-  const tosClauses: SimplifiedClause[] = [
-    { id: 't0', clause_number: '1', title: 'Website Terms of Service Preamble', clause_type: 'parties & recitals', original_text: 'When you use the website, you agree to follow its rules.', simple_explanation: 'Website terms preamble.', very_simple_explanation: 'Terms preamble.', risk_level: 'low', icon_name: 'Globe', one_line_consequence: 'Preamble terms.' },
-    { id: 't1', clause_number: '2', title: 'Intellectual Property', clause_type: 'governing law & jurisdiction', original_text: 'All text images logos belong to company.', simple_explanation: 'Company owns all content.', very_simple_explanation: 'Content ownership.', risk_level: 'low', icon_name: 'ShieldCheck', one_line_consequence: 'IP ownership.' },
-    { id: 't2', clause_number: '3', title: 'User Conduct', clause_type: 'use & restrictions', original_text: 'Must not upload harmful software or copy data.', simple_explanation: 'Prohibits harmful uploads.', very_simple_explanation: 'No hacking.', risk_level: 'low', icon_name: 'AlertTriangle', one_line_consequence: 'Conduct rules.' },
-    { id: 't3', clause_number: '4', title: 'Disclaimer of Warranties', clause_type: 'limitation of liability', original_text: 'Service offered as is without guarantees.', simple_explanation: 'Service provided without warranty.', very_simple_explanation: 'As-is service.', risk_level: 'high', icon_name: 'AlertOctagon', one_line_consequence: 'No warranties.' },
-    { id: 't4', clause_number: '5', title: 'Limitation of Liability', clause_type: 'indemnity & liability', original_text: 'Company not responsible for damages from use.', simple_explanation: 'Liability capped to zero.', very_simple_explanation: 'Company not liable.', risk_level: 'high', icon_name: 'ShieldAlert', one_line_consequence: 'Liability cap.' },
-  ];
+  const allChanges = compRes.aligned_pairs.flatMap((p) => p.detected_field_changes || []);
+  const detectedFields = new Set(allChanges.map((c) => c.field));
+  const requiredFields = ['eligibility', 'income_limit', 'age_limit', 'benefit', 'required_documents', 'deadline'] as const;
 
-  const leaseDoc: DocumentAnalysisResult = { ...docAObj, document_title: 'Equipment Lease Agreement', clauses: leaseClauses };
-  const tosDoc: DocumentAnalysisResult = { ...docBObj, document_title: 'Website Terms of Service', clauses: tosClauses };
+  for (const rf of requiredFields) {
+    if (!detectedFields.has(rf)) {
+      console.error(`❌ [FAIL] Test 1c: Expected field change "${rf}" was not detected. Found:`, Array.from(detectedFields));
+      process.exit(1);
+    }
+  }
+  console.log('✅ [PASS] Test 1c: All 6 required policy dimensions detected (eligibility, income_limit, age_limit, benefit, required_documents, deadline).');
 
-  const compLow = await compareTwoDocuments(leaseDoc, tosDoc);
+  const modifiedPair2 = compRes.aligned_pairs.find((p) => p.doc_a_clause?.id === 'a2');
+  if (
+    !modifiedPair2 ||
+    modifiedPair2.old_text !== circularAClauses[1].original_text ||
+    modifiedPair2.new_text !== circularBClauses[1].original_text
+  ) {
+    console.error('❌ [FAIL] Test 1d: Exact old_text and new_text not preserved on modified pair.');
+    process.exit(1);
+  }
+  console.log('✅ [PASS] Test 1d: Exact old_text and new_text preserved verbatim.');
 
-  // Assert zero occurrences of literal "undefined"
-  const compStr = JSON.stringify(compLow);
+  // TEST 2: Zero occurrences of literal "undefined"
+  console.log('\n--- TEST 2: ZERO "UNDEFINED" IN OUTPUT ---');
+  const compStr = JSON.stringify(compRes);
   if (compStr.toLowerCase().includes('undefined')) {
-    console.error(`❌ [FAIL] Test 2: Literal "undefined" found in output string:\n${compStr}`);
+    console.error('❌ [FAIL] Test 2: Literal "undefined" found in comparison output.');
     process.exit(1);
-  } else {
-    console.log('✅ [PASS] Test 2a: 0 occurrences of "undefined" in comparison output.');
   }
+  console.log('✅ [PASS] Test 2: 0 occurrences of "undefined" in comparison output.');
 
-  // Assert preambles matched under 'parties & recitals'
-  const preamblePair = compLow.aligned_pairs.find((p) => p.clause_type === 'parties & recitals');
-  if (!preamblePair || preamblePair.status !== 'matched') {
-    console.error(`❌ [FAIL] Test 2b: Preambles were not matched together under "parties & recitals".`);
-    process.exit(1);
-  } else {
-    console.log('✅ [PASS] Test 2b: Preambles correctly matched as a "parties & recitals" pair.');
-  }
-
-  // Assert all 10 clauses are preserved in aligned_pairs
-  const totalClausesInPairs = new Set([
-    ...compLow.aligned_pairs.map((p) => p.doc_a_clause?.id).filter(Boolean),
-    ...compLow.aligned_pairs.map((p) => p.doc_b_clause?.id).filter(Boolean),
-  ]);
-
-  if (totalClausesInPairs.size < 10) {
-    console.error(`❌ [FAIL] Test 2c: Expected 10 total clauses preserved in output, got ${totalClausesInPairs.size}.`);
-    process.exit(1);
-  } else {
-    console.log(`✅ [PASS] Test 2c: All ${totalClausesInPairs.size} clauses preserved in aligned_pairs output.`);
-  }
-
-  // Assert stated matched count in summary matches actual matched pairs count
-  const actualMatchedCount = compLow.aligned_pairs.filter((p) => p.status === 'matched').length;
-  if (!compLow.key_differences_summary.includes(`Matched ${actualMatchedCount} common clause type(s)`)) {
-    console.error(`❌ [FAIL] Test 2d: Summary "${compLow.key_differences_summary}" does not match actual count ${actualMatchedCount}.`);
-    process.exit(1);
-  } else {
-    console.log(`✅ [PASS] Test 2d: Stated matched count (${actualMatchedCount}) is strictly accurate.`);
-  }
-
-  // TEST 3: Duplicate Category Pair Alignment
+  // TEST 3: Duplicate Category Alignment
   console.log('\n--- TEST 3: DUPLICATE CATEGORY ALIGNMENT & COMPLETENESS ---');
-  const docADupClauses: SimplifiedClause[] = [
-    { id: 'ind_1', clause_number: '1', title: 'Operational Indemnity', clause_type: 'indemnity & liability', original_text: 'Indemnify for operational negligence.', simple_explanation: 'Pay for operational loss.', very_simple_explanation: 'Pay for loss.', risk_level: 'high', icon_name: 'ShieldAlert', one_line_consequence: 'Operational liability.' },
-    { id: 'ind_2', clause_number: '2', title: 'Third-Party Claims Indemnity', clause_type: 'indemnity & liability', original_text: 'Indemnify for third party IP claims.', simple_explanation: 'Pay for IP claims.', very_simple_explanation: 'Pay IP claims.', risk_level: 'high', icon_name: 'ShieldAlert', one_line_consequence: 'IP liability.' },
+  const docADup: SimplifiedClause[] = [
+    { id: 'doc_1', clause_number: '1', title: 'Income Documents', clause_type: 'required documents', original_text: 'Submit Income Certificate and Ration Card.', simple_explanation: 'Income docs', very_simple_explanation: 'Income docs', risk_level: 'low', icon_name: 'FileText', one_line_consequence: 'Docs' },
+    { id: 'doc_2', clause_number: '2', title: 'Land Documents', clause_type: 'required documents', original_text: 'Submit Land Record RTC and Aadhaar.', simple_explanation: 'Land docs', very_simple_explanation: 'Land docs', risk_level: 'low', icon_name: 'FileText', one_line_consequence: 'Docs' },
   ];
-  const docBDupClauses: SimplifiedClause[] = [
-    { id: 'ind_3', clause_number: '1', title: 'General Indemnity', clause_type: 'indemnity & liability', original_text: 'Indemnify for third party legal claims.', simple_explanation: 'Pay for legal claims.', very_simple_explanation: 'Pay claims.', risk_level: 'high', icon_name: 'ShieldAlert', one_line_consequence: 'Legal liability.' },
+  const docBDup: SimplifiedClause[] = [
+    { id: 'doc_3', clause_number: '1', title: 'Updated Land Documents', clause_type: 'required documents', original_text: 'Submit Land Record RTC, Aadhaar, and Bank Passbook.', simple_explanation: 'Land docs', very_simple_explanation: 'Land docs', risk_level: 'low', icon_name: 'FileText', one_line_consequence: 'Docs' },
   ];
 
-  const dupAlign = alignClauses(docADupClauses, docBDupClauses);
-
+  const dupAlign = alignClauses(docADup, docBDup);
   const matchedDup = dupAlign.alignedPairs.filter((p) => p.status === 'matched');
-  const aOnlyDup = dupAlign.alignedPairs.filter((p) => p.status === 'a_only');
+  const removedDup = dupAlign.alignedPairs.filter((p) => p.change_type === 'removed');
 
-  if (matchedDup.length !== 1 || aOnlyDup.length !== 1) {
-    console.error(`❌ [FAIL] Test 3: Expected 1 matched pair and 1 a_only pair for duplicate indemnity category, got matched=${matchedDup.length}, a_only=${aOnlyDup.length}.`);
+  if (matchedDup.length !== 1 || removedDup.length !== 1 || matchedDup[0].doc_a_clause?.id !== 'doc_2') {
+    console.error('❌ [FAIL] Test 3: Duplicate category alignment failed:', { matchedDup, removedDup });
     process.exit(1);
   }
+  console.log('✅ [PASS] Test 3: Duplicate section categories paired highest similarity first; unmatched retained as Removed.');
 
-  // Verify category labels on both are 'indemnity & liability'
-  if (matchedDup[0].clause_type !== 'indemnity & liability' || aOnlyDup[0].clause_type !== 'indemnity & liability') {
-    console.error(`❌ [FAIL] Test 3: Category labels misassigned. Matched: ${matchedDup[0].clause_type}, a_only: ${aOnlyDup[0].clause_type}`);
-    process.exit(1);
-  } else {
-    console.log('✅ [PASS] Test 3: Duplicate category clauses correctly paired highest similarity first, extra clause retained as a_only with true category label.');
-  }
-
+  // TEST 4 & 5: Code Integrity Audits
   const projectRoot = path.resolve(process.cwd(), '..');
   const getFilePath = (relPath: string) => {
     if (fs.existsSync(path.join(process.cwd(), relPath))) return path.join(process.cwd(), relPath);
     return path.join(projectRoot, relPath);
   };
 
-  // TEST 4: No Raw-Text-Slice Fallback Audit
   console.log('\n--- TEST 4: NO RAW-TEXT-SLICE FALLBACK AUDIT ---');
-  const compViewPath = getFilePath('src/components/ComparisonView.tsx');
-  const compViewText = fs.readFileSync(compViewPath, 'utf8');
-
+  const compViewText = fs.readFileSync(getFilePath('src/components/ComparisonView.tsx'), 'utf8');
   if (compViewText.includes('.slice(0, 200)') || compViewText.includes('.slice(0,200)')) {
-    console.error(`❌ [FAIL] Test 4: ComparisonView.tsx contains raw text slice fallback (.slice(0, 200))!`);
+    console.error('❌ [FAIL] Test 4: ComparisonView.tsx contains raw text slice fallback (.slice(0, 200))!');
     process.exit(1);
-  } else {
-    console.log('✅ [PASS] Test 4: 0 raw-text-slice fallbacks in ComparisonView rendering pipeline.');
   }
+  console.log('✅ [PASS] Test 4: 0 raw-text-slice fallbacks in ComparisonView.tsx.');
 
-  // TEST 5: Single Shared Alignment Module Confirmation
   console.log('\n--- TEST 5: SINGLE SHARED MODULE AUDIT ---');
-  const backendPath = getFilePath('server/src/services/astraBackend.ts');
-  const backendText = fs.readFileSync(backendPath, 'utf8');
-
+  const backendText = fs.readFileSync(getFilePath('server/src/services/astraBackend.ts'), 'utf8');
   if (!backendText.includes("from '../../../src/utils/clauseAlignment'")) {
-    console.error(`❌ [FAIL] Test 5: astraBackend.ts does not import single shared clauseAlignment module!`);
+    console.error('❌ [FAIL] Test 5: astraBackend.ts does not import single shared clauseAlignment.ts!');
     process.exit(1);
-  } else {
-    console.log('✅ [PASS] Test 5: astraBackend.ts imports single shared clauseAlignment.ts module.');
   }
+  console.log('✅ [PASS] Test 5: astraBackend.ts imports shared clauseAlignment.ts.');
 
-  // TEST 6: Real Document Analysis Risk Score Reuse
-  console.log('\n--- TEST 6: REAL DOCUMENT RISK SCORE REUSE REGRESSION ---');
-  const rentalSample1 = `RENTAL AGREEMENT
-This agreement is made on 1st March 2026 between Landlord and Tenant.
-1. RENT: Tenant agrees to pay Rs. 25,000 per month on or before 5th of each month.
-2. NOTICE PERIOD: Either party may terminate with 30 days written notice.
-3. SECURITY DEPOSIT: Tenant deposits Rs. 100,000 refundable upon vacating.`;
+  // TEST 6: End-to-End Two-Circular Ingestion -> Deterministic Comparison
+  console.log('\n--- TEST 6: E2E TWO-CIRCULAR ANALYSIS & DETERMINISTIC DIFF ---');
+  const circularTextA = `GOVERNMENT OF KARNATAKA
+DEPARTMENT OF EDUCATION
+Circular No. EDU/2025/01
+Sub: Post-Matric Scholarship Scheme
+1. ELIGIBILITY CRITERIA: Students aged 18 to 25 years with annual family income up to Rs. 2,00,000.
+2. BENEFITS: Annual scholarship grant of Rs. 15,000.
+3. REQUIRED DOCUMENTS: Aadhaar Card and Income Certificate.
+4. DEADLINE: Last date to apply is 31st October 2025.`;
 
-  const rentalSample2 = `EMPLOYMENT CONTRACT
-1. SALARY: Rs. 50,000 per month.
-2. PROBATION: 6 months probation period.
-3. NON-COMPETE: Employee agrees not to join any competitor for 24 months after exit.`;
+  const circularTextB = `GOVERNMENT OF KARNATAKA
+DEPARTMENT OF EDUCATION
+Circular No. EDU/2026/01 (Corrigendum)
+Sub: Post-Matric Scholarship Scheme Revised Guidelines
+1. ELIGIBILITY CRITERIA: Students aged 18 to 28 years with annual family income up to Rs. 2,50,000.
+2. BENEFITS: Annual scholarship grant of Rs. 20,000.
+3. REQUIRED DOCUMENTS: Aadhaar Card, Income Certificate, and Bonafide Certificate.
+4. DEADLINE: Last date to apply is 30th November 2026.
+5. GRIEVANCE REDRESSAL: Contact District Scholarship Nodal Officer for support.`;
 
-  const realDocA = await analyzeDocumentText(rentalSample1);
-  const realDocB = await analyzeDocumentText(rentalSample2);
+  const analyzedA = await analyzeDocumentText(circularTextA);
+  const analyzedB = await analyzeDocumentText(circularTextB);
+  const e2eComp = await compareTwoDocuments(analyzedA, analyzedB);
 
-  const realComp = await compareTwoDocuments(realDocA, realDocB);
-  const expectedStr = `${realDocA.overall_risk_score} vs ${realDocB.overall_risk_score}`;
-  const revExpectedStr = `${realDocB.overall_risk_score} vs ${realDocA.overall_risk_score}`;
-
-  if (!(realComp.winner_recommendation ?? '').includes(expectedStr) && !(realComp.winner_recommendation ?? '').includes(revExpectedStr)) {
-    console.error(`❌ [FAIL] Test 6: Compare recommendation "${realComp.winner_recommendation}" did not reuse exact Analyze Document risk scores (${expectedStr}).`);
-    process.exit(1);
+  const e2eFields = new Set(e2eComp.aligned_pairs.flatMap((p) => p.detected_field_changes || []).map((f) => f.field));
+  if (
+    (e2eComp.added_count ?? 0) >= 1 &&
+    (e2eComp.modified_count ?? 0) >= 3 &&
+    e2eFields.has('income_limit') &&
+    e2eFields.has('age_limit') &&
+    e2eFields.has('benefit') &&
+    e2eFields.has('required_documents') &&
+    e2eFields.has('deadline') &&
+    e2eComp.winner_recommendation === undefined
+  ) {
+    console.log(
+      `✅ [PASS] Test 6: E2E comparison detected Added=${e2eComp.added_count}, Modified=${e2eComp.modified_count}, Unchanged=${e2eComp.unchanged_count}, Fields=${Array.from(e2eFields).join(', ')}.`
+    );
   } else {
-    console.log(`✅ [PASS] Test 6: Compare recommendation correctly reused exact Analyze Document risk scores (${realDocA.overall_risk_score} vs ${realDocB.overall_risk_score}).`);
+    console.error('❌ [FAIL] Test 6: E2E comparison missed expected diffs:', {
+      added: e2eComp.added_count,
+      modified: e2eComp.modified_count,
+      fields: Array.from(e2eFields),
+      winner: e2eComp.winner_recommendation,
+    });
+    process.exit(1);
   }
 
   console.log('\n====================================================');
-  console.log('  SUMMARY: ALL COMPARE FIX VALIDATION TESTS PASSED! 🟢');
+  console.log('  SUMMARY: ALL PHASE 3 COMPARISON TESTS PASSED! 🟢');
   console.log('====================================================\n');
 }
 
-runCompareFixValidationTestSuite();
+runCompareFixValidationTestSuite().catch((err) => {
+  console.error('❌ Phase 3 test crashed:', err);
+  process.exit(1);
+});

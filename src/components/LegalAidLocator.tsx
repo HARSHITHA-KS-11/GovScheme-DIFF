@@ -1,123 +1,169 @@
 import React, { useState } from 'react';
-import { MapPin, Phone, Shield, ExternalLink, Search, Info, Clock, Globe } from 'lucide-react';
+import { Phone, Shield, ExternalLink, Search, Info, Clock, Globe, Building2 } from 'lucide-react';
 
 import { useLanguage } from '../context/LanguageContext';
 import { saveStorage, loadStorage, clearFeatureStorage } from '../utils/persistence';
 
-interface DLSACenter {
-  state: string;
-  state_hi: string;
-  district: string;
-  district_hi: string;
+interface SchemePortalEntry {
+  category: 'Central Scheme Portals' | 'Welfare & Pensions' | 'Education & Scholarships' | 'Health & Insurance' | 'Agriculture & Rural' | 'State & Citizen Services';
+  jurisdiction: string;
   name: string;
-  name_hi: string;
-  address: string;
-  address_hi: string;
+  description: string;
   helpline: string;
-  email: string;
+  portalUrl: string;
+  portalLabel: string;
 }
 
-const SAMPLE_DLSA_CENTERS: DLSACenter[] = [
+const SCHEME_PORTAL_DIRECTORY: SchemePortalEntry[] = [
   {
-    state: 'Karnataka',
-    state_hi: 'कर्नाटक',
-    district: 'Bengaluru Urban',
-    district_hi: 'बेंगलुरु अर्बन',
-    name: 'District Legal Services Authority (DLSA) Bengaluru Urban',
-    name_hi: 'जिला कानूनी सेवा प्राधिकरण (DLSA) बेंगलुरु अर्बन',
-    address: 'City Civil Court Complex, Opposite Kaveri Bhavan, K.G. Road, Bengaluru - 560001',
-    address_hi: 'सिटी सिविल कोर्ट कॉम्प्लेक्स, कावेरी भवन के सामने, के.जी. रोड, बेंगलुरु - 560001',
-    helpline: '080-22241600 / 15100',
-    email: 'dlsa.bengaluru@karnataka.gov.in',
+    category: 'Central Scheme Portals',
+    jurisdiction: 'All India • Central & State Schemes',
+    name: 'myScheme — National Government Scheme Discovery Portal',
+    description: 'Search central and state welfare schemes by age, income, state, category, and education level, and check application requirements.',
+    helpline: 'UMANG Helpline: 1800-11-1555',
+    portalUrl: 'https://www.myscheme.gov.in',
+    portalLabel: 'myscheme.gov.in',
   },
   {
-    state: 'Delhi',
-    state_hi: 'दिल्ली',
-    district: 'New Delhi',
-    district_hi: 'नई दिल्ली',
-    name: 'New Delhi District Legal Services Authority (NDDLSA)',
-    name_hi: 'नई दिल्ली जिला कानूनी सेवा प्राधिकरण (NDDLSA)',
-    address: 'Patiala House Courts Complex, New Delhi - 110001',
-    address_hi: 'पटियाला हाउस कोर्ट परिसर, नई दिल्ली - 110001',
-    helpline: '011-23073385 / 15100',
-    email: 'nddlsa-phc@nic.in',
+    category: 'Central Scheme Portals',
+    jurisdiction: 'All India • Single Citizen Services Hub',
+    name: 'UMANG Portal & Citizen Helpdesk',
+    description: 'Access central and state scheme applications, EPFO passbooks, pension updates, ration card services, and grievance tracking in one place.',
+    helpline: 'Toll-Free: 1800-11-1555',
+    portalUrl: 'https://web.umang.gov.in',
+    portalLabel: 'web.umang.gov.in',
   },
   {
-    state: 'Maharashtra',
-    state_hi: 'महाराष्ट्र',
-    district: 'Mumbai City',
-    district_hi: 'मुंबई शहर',
-    name: 'Mumbai District Legal Services Authority',
-    name_hi: 'मुंबई जिला कानूनी सेवा प्राधिकरण',
-    address: 'City Civil & Sessions Court, Fort, Mumbai - 400032',
-    address_hi: 'सिटी सिविल एंड सेशंस कोर्ट, फोर्ट, मुंबई - 400032',
-    helpline: '022-22624458 / 15100',
-    email: 'mumbaidlsacourt@gmail.com',
+    category: 'Education & Scholarships',
+    jurisdiction: 'All India • Ministry of Education & Welfare Ministries',
+    name: 'National Scholarship Portal (NSP)',
+    description: 'Apply for Pre-Matric, Post-Matric, and Merit-cum-Means scholarships, check institutional verification, and track DBT disbursal.',
+    helpline: 'Helpdesk: 0120-6619540',
+    portalUrl: 'https://scholarships.gov.in',
+    portalLabel: 'scholarships.gov.in',
   },
   {
-    state: 'Haryana',
-    state_hi: 'हरियाणा',
-    district: 'Gurugram',
-    district_hi: 'गुरुग्राम',
-    name: 'District Legal Services Authority Gurugram',
-    name_hi: 'जिला कानूनी सेवा प्राधिकरण गुरुग्राम',
-    address: 'District Courts Complex, Near Rajiv Chowk, Gurugram - 122001',
-    address_hi: 'जिला कोर्ट परिसर, राजीव चौक के पास, गुरुग्राम - 122001',
-    helpline: '0124-2221220 / 15100',
-    email: 'dlsa.gurugram@hry.gov.in',
+    category: 'Health & Insurance',
+    jurisdiction: 'All India • National Health Authority',
+    name: 'Ayushman Bharat (PM-JAY) Beneficiary Portal',
+    description: 'Check family eligibility under PM-JAY, search empanelled hospitals, complete e-KYC, and download your Ayushman card.',
+    helpline: 'Toll-Free: 14555',
+    portalUrl: 'https://beneficiary.nha.gov.in',
+    portalLabel: 'beneficiary.nha.gov.in',
+  },
+  {
+    category: 'Agriculture & Rural',
+    jurisdiction: 'All India • Ministry of Agriculture & Farmers Welfare',
+    name: 'PM-KISAN Samman Nidhi Citizen Portal',
+    description: 'Complete farmer self-registration, verify Aadhaar & bank seeding status, and view beneficiary payment installments.',
+    helpline: 'Toll-Free: 155261 / 011-24300606',
+    portalUrl: 'https://pmkisan.gov.in',
+    portalLabel: 'pmkisan.gov.in',
+  },
+  {
+    category: 'Welfare & Pensions',
+    jurisdiction: 'All India • Ministry of Labour & Employment',
+    name: 'e-Shram Unorganised Worker Portal',
+    description: 'Register for a Universal Account Number (UAN), access social security benefits, and link employment and pension schemes.',
+    helpline: 'Toll-Free: 14434',
+    portalUrl: 'https://eshram.gov.in',
+    portalLabel: 'eshram.gov.in',
+  },
+  {
+    category: 'State & Citizen Services',
+    jurisdiction: 'All India • Public Grievance Redressal',
+    name: 'CPGRAMS — Centralised Public Grievance Portal',
+    description: 'Submit formal complaints and track department responses if a government scheme application, pension, or benefit transfer is delayed.',
+    helpline: 'Online Grievance Tracking Portal',
+    portalUrl: 'https://pgportal.gov.in',
+    portalLabel: 'pgportal.gov.in',
+  },
+  {
+    category: 'State & Citizen Services',
+    jurisdiction: 'Karnataka • State Citizen Portal',
+    name: 'Seva Sindhu — Government of Karnataka Guarantee & Welfare Portal',
+    description: 'Official Karnataka state portal for guarantee schemes, income/caste certificates, pension applications, and status tracking.',
+    helpline: 'State Helpdesk: 080-22279954 / 1902',
+    portalUrl: 'https://sevasindhu.karnataka.gov.in',
+    portalLabel: 'sevasindhu.karnataka.gov.in',
+  },
+  {
+    category: 'State & Citizen Services',
+    jurisdiction: 'Delhi • NCT e-Governance Services',
+    name: 'Delhi e-District Citizen Portal',
+    description: 'Apply online for income certificates, domicile proofs, social welfare pensions, and verified citizen documents in NCT of Delhi.',
+    helpline: 'Helpline: 1076 (Doorstep Service)',
+    portalUrl: 'https://edistrict.delhigovt.nic.in',
+    portalLabel: 'edistrict.delhigovt.nic.in',
+  },
+  {
+    category: 'State & Citizen Services',
+    jurisdiction: 'Maharashtra • State Citizen Services',
+    name: 'Aaple Sarkar — Government of Maharashtra Portal',
+    description: 'Official portal for Maharashtra state welfare schemes, revenue and caste certificates, and online citizen service tracking.',
+    helpline: 'Toll-Free: 1800-120-8040',
+    portalUrl: 'https://aaplesarkar.mahaonline.gov.in',
+    portalLabel: 'aaplesarkar.mahaonline.gov.in',
   },
 ];
 
+const CATEGORIES = [
+  'All',
+  'Central Scheme Portals',
+  'Welfare & Pensions',
+  'Education & Scholarships',
+  'Health & Insurance',
+  'Agriculture & Rural',
+  'State & Citizen Services',
+] as const;
+
 export const LegalAidLocator: React.FC = () => {
-  const { language, t } = useLanguage();
-  const isHi = language === 'hi';
-  const [selectedState, setSelectedStateState] = useState<string>(() => {
-    return loadStorage<string>('legallens_legalaid_state', 'All');
+  const { t } = useLanguage();
+  const [selectedCategory, setSelectedCategoryState] = useState<string>(() => {
+    return loadStorage<string>('govscheme_portals_category', 'All');
   });
-  const setSelectedState = (val: string) => {
-    setSelectedStateState(val);
-    saveStorage('legallens_legalaid_state', val);
+  const setSelectedCategory = (val: string) => {
+    setSelectedCategoryState(val);
+    saveStorage('govscheme_portals_category', val);
   };
 
   const [searchQuery, setSearchQueryState] = useState<string>(() => {
-    return loadStorage<string>('legallens_legalaid_search', '');
+    return loadStorage<string>('govscheme_portals_search', '');
   });
   const setSearchQuery = (val: string) => {
     setSearchQueryState(val);
-    saveStorage('legallens_legalaid_search', val);
+    saveStorage('govscheme_portals_search', val);
   };
 
   const handleClearFilters = () => {
-    setSelectedState('All');
+    setSelectedCategory('All');
     setSearchQuery('');
-    clearFeatureStorage('legallens_legalaid_');
+    clearFeatureStorage('govscheme_portals_');
   };
 
-  const filteredCenters = SAMPLE_DLSA_CENTERS.filter((center) => {
-    const matchesState = selectedState === 'All' || center.state === selectedState;
-    const q = searchQuery.toLowerCase();
+  const filteredPortals = SCHEME_PORTAL_DIRECTORY.filter((entry) => {
+    const matchesCategory = selectedCategory === 'All' || entry.category === selectedCategory;
+    const q = searchQuery.trim().toLowerCase();
     const matchesQuery =
-      center.district.toLowerCase().includes(q) ||
-      center.name.toLowerCase().includes(q) ||
-      center.address.toLowerCase().includes(q) ||
-      center.district_hi.toLowerCase().includes(q) ||
-      center.name_hi.toLowerCase().includes(q) ||
-      center.address_hi.toLowerCase().includes(q);
-    return matchesState && matchesQuery;
+      !q ||
+      entry.name.toLowerCase().includes(q) ||
+      entry.description.toLowerCase().includes(q) ||
+      entry.jurisdiction.toLowerCase().includes(q) ||
+      entry.category.toLowerCase().includes(q) ||
+      entry.helpline.toLowerCase().includes(q) ||
+      entry.portalLabel.toLowerCase().includes(q);
+    return matchesCategory && matchesQuery;
   });
 
   return (
     <div className="space-y-6 animate-fade-in-up">
-      {/* Header & High-Contrast Helpline Hero Module */}
+      {/* Header & High-Contrast Portal Hero Module */}
       <div className="bg-[#FBF8F1] border border-[#E7E1D3] rounded-2xl p-5 md:p-6 shadow-xs space-y-5">
-        {/* Split Header Row: Left Column Stack (58%) & Right Column Illustration (38%) */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 md:gap-8">
-          {/* Left Column Stack: Title → Description → Helpline Card → Supporting Pills */}
           <div className="w-full md:w-[58%] space-y-4 text-left">
-            {/* Title & Description */}
             <div className="flex items-center space-x-3 border-b border-[#E7E1D3] pb-3">
               <div className="w-9 h-9 rounded-lg bg-[#F6F1E7] text-[#B85C38] flex items-center justify-center border border-[#E7E1D3] shrink-0">
-                <MapPin className="w-4 h-4" />
+                <Building2 className="w-4 h-4" />
               </div>
               <div>
                 <h2 className="text-base sm:text-lg font-bold font-heading text-[#1E1B17]">
@@ -129,26 +175,41 @@ export const LegalAidLocator: React.FC = () => {
               </div>
             </div>
 
-            {/* Visually Dominating Helpline Card (Scaled to Column Width) */}
+            {/* Highlighted National Scheme Portal & UMANG Citizen Helpdesk Card */}
             <div className="bg-[#17140F] p-4 sm:p-5 rounded-xl border border-[#17140F] text-[#FBF8F1] flex flex-wrap items-center justify-between gap-3.5 shadow-md">
               <div className="flex items-center space-x-3.5">
                 <div className="w-11 h-11 rounded-full bg-[#D1FAE5]/20 text-[#6EE7B7] flex items-center justify-center border border-[#6EE7B7]/40 shrink-0">
-                  <Phone className="w-5.5 h-5.5 animate-pulse" />
+                  <Globe className="w-5.5 h-5.5" />
                 </div>
                 <div>
-                  <div className="text-[10px] font-bold uppercase text-[#6EE7B7] tracking-wider">{t('legal_aid.helpline_tag')}</div>
-                  <div className="text-xl sm:text-2xl font-bold font-mono text-white tracking-wide">15100</div>
+                  <div className="text-[10px] font-bold uppercase text-[#6EE7B7] tracking-wider">
+                    {t('legal_aid.helpline_tag')}
+                  </div>
+                  <div className="text-lg sm:text-xl font-bold font-mono text-white tracking-wide">
+                    myscheme.gov.in • 1800-11-1555
+                  </div>
                   <p className="text-[11px] text-slate-300">{t('legal_aid.helpline_sub')}</p>
                 </div>
               </div>
 
-              <a
-                href="tel:15100"
-                className="px-4 py-2 bg-[#6EE7B7] hover:bg-[#A7F3D0] text-[#065F46] font-bold text-xs rounded-lg shadow-sm flex items-center space-x-1.5 transition-colors shrink-0"
-              >
-                <Phone className="w-3.5 h-3.5 animate-pulse" />
-                <span>{t('legal_aid.call_now')}</span>
-              </a>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <a
+                  href="tel:1800111555"
+                  className="px-3.5 py-2 bg-[#6EE7B7] hover:bg-[#A7F3D0] text-[#065F46] font-bold text-xs rounded-lg shadow-sm flex items-center space-x-1.5 transition-colors"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>{t('legal_aid.call_now')}</span>
+                </a>
+                <a
+                  href="https://www.myscheme.gov.in"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-2 bg-[#B85C38] hover:bg-[#9C4B2B] text-white font-bold text-xs rounded-lg shadow-sm flex items-center space-x-1.5 transition-colors"
+                >
+                  <span>Visit myScheme</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
             </div>
 
             {/* Supporting Feature Pills */}
@@ -175,15 +236,9 @@ export const LegalAidLocator: React.FC = () => {
           >
             <img
               src="/assets/legal-aid-illustration.png"
-              alt="Illustration of a person being guided toward legal help"
+              alt="Illustration of citizens accessing official government scheme portals and helpdesks"
               loading="eager"
               draggable="false"
-              onDragStart={(e) => e.preventDefault()}
-              onContextMenu={(e) => e.preventDefault()}
-              onMouseDown={(e) => e.preventDefault()}
-              onDoubleClick={(e) => e.preventDefault()}
-              onTouchStart={(e) => e.preventDefault()}
-              onTouchMove={(e) => e.preventDefault()}
               className="w-full h-auto max-w-xs sm:max-w-sm object-contain mx-auto select-none pointer-events-none"
             />
           </div>
@@ -194,8 +249,8 @@ export const LegalAidLocator: React.FC = () => {
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-[#6E6659] absolute left-3 top-2.5" />
             <input
-              id="legal-aid-search"
-              name="legalAidSearch"
+              id="scheme-portal-search"
+              name="schemePortalSearch"
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -206,37 +261,32 @@ export const LegalAidLocator: React.FC = () => {
           </div>
 
           <select
-            id="legal-aid-state-select"
-            name="legalAidState"
-            value={selectedState}
-            onChange={(e) => setSelectedState(e.target.value)}
+            id="scheme-portal-category-select"
+            name="schemePortalCategory"
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
             aria-label={t('legal_aid.all_states')}
             className="bg-[#F6F1E7] border border-[#E7E1D3] rounded-lg px-3 py-2 text-xs text-[#1E1B17] focus:outline-none focus:border-[#B85C38]"
           >
             <option value="All">{t('legal_aid.all_states')}</option>
-            <option value="Karnataka">{t('legal_aid.state_karnataka')}</option>
-            <option value="Delhi">{t('legal_aid.state_delhi')}</option>
-            <option value="Maharashtra">{t('legal_aid.state_maharashtra')}</option>
-            <option value="Haryana">{t('legal_aid.state_haryana')}</option>
+            {CATEGORIES.filter((c) => c !== 'All').map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
           </select>
         </div>
       </div>
 
-      {/* DLSA Center Cards */}
-      {filteredCenters.length === 0 ? (
+      {/* Scheme Portal & Helpdesk Cards */}
+      {filteredPortals.length === 0 ? (
         <div className="bg-[#FBF8F1] border border-[#E7E1D3] rounded-2xl p-8 text-center space-y-3 shadow-xs">
           <div className="relative w-24 h-24 mx-auto">
             <img
               src="/assets/empty-state-illustration.png"
-              alt="Illustration of a magnifying glass examining a document"
+              alt="Illustration of a magnifying glass examining a circular"
               loading="eager"
               draggable="false"
-              onDragStart={(e) => e.preventDefault()}
-              onContextMenu={(e) => e.preventDefault()}
-              onMouseDown={(e) => e.preventDefault()}
-              onDoubleClick={(e) => e.preventDefault()}
-              onTouchStart={(e) => e.preventDefault()}
-              onTouchMove={(e) => e.preventDefault()}
               className="w-24 h-24 object-contain mx-auto select-none pointer-events-none"
             />
           </div>
@@ -245,60 +295,63 @@ export const LegalAidLocator: React.FC = () => {
             <p className="text-xs text-[#6E6659] mt-1 max-w-sm mx-auto">
               {t('legal_aid.no_offices_sub', { query: searchQuery })}
             </p>
+            <button
+              type="button"
+              onClick={handleClearFilters}
+              className="mt-3 px-3.5 py-1.5 text-xs font-bold text-white bg-[#B85C38] hover:bg-[#9C4B2B] rounded-lg transition-colors cursor-pointer"
+            >
+              Reset Directory Filters
+            </button>
           </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredCenters.map((center, idx) => {
-            const stateDisplay = isHi ? center.state_hi : center.state;
-            const districtDisplay = isHi ? center.district_hi : center.district;
-            const nameDisplay = isHi ? center.name_hi : center.name;
-            const addressDisplay = isHi ? center.address_hi : center.address;
-
-            return (
-              <div
-                key={idx}
-                className="bg-[#FBF8F1] border border-[#E7E1D3] hover:border-[#CBD5E1] rounded-2xl p-5 shadow-xs space-y-3 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
-              >
-                <div className="flex items-center justify-between border-b border-[#E7E1D3] pb-2">
+          {filteredPortals.map((entry, idx) => (
+            <div
+              key={idx}
+              className="bg-[#FBF8F1] border border-[#E7E1D3] hover:border-[#CBD5E1] rounded-2xl p-5 shadow-xs space-y-3 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md flex flex-col justify-between"
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2 border-b border-[#E7E1D3] pb-2">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#B85C38] bg-[#B85C38]/10 px-2.5 py-0.5 rounded border border-[#B85C38]/20">
-                    {stateDisplay} • {districtDisplay}
+                    {entry.category}
                   </span>
-                  <Shield className="w-4 h-4 text-[#065F46]" />
+                  <Shield className="w-4 h-4 text-[#065F46] shrink-0" />
                 </div>
 
-                <h3 className="text-xs font-bold text-[#1E1B17] leading-snug">{nameDisplay}</h3>
-
-                <div className="text-xs text-[#6E6659] space-y-1 font-sans">
-                  <p className="flex items-start space-x-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-[#6E6659] shrink-0 mt-0.5" />
-                    <span>{addressDisplay}</span>
-                  </p>
-                  <p className="flex items-center space-x-1.5 text-[#B85C38] font-medium">
-                    <Phone className="w-3.5 h-3.5 shrink-0" />
-                    <span>{t('legal_aid.helpline_label')}: {center.helpline}</span>
-                  </p>
+                <div>
+                  <h3 className="text-xs font-bold text-[#1E1B17] leading-snug">{entry.name}</h3>
+                  <p className="text-[11px] font-semibold text-[#6E6659] mt-0.5">{entry.jurisdiction}</p>
                 </div>
 
-                <div className="pt-2 border-t border-[#E7E1D3] flex items-center justify-between text-xs">
-                  <span className="text-[#6E6659] text-[11px]">{t('legal_aid.free_rep_eligible')}</span>
-                  <a
-                    href="https://nalsa.gov.in"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[#B85C38] hover:text-[#9C4B2B] font-semibold flex items-center space-x-1 text-[11px]"
-                  >
-                    <span>{t('legal_aid.official_nalsa')}</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
+                <p className="text-xs text-[#6E6659] leading-relaxed font-sans">
+                  {entry.description}
+                </p>
+
+                <p className="flex items-center space-x-1.5 text-xs text-[#B85C38] font-medium">
+                  <Phone className="w-3.5 h-3.5 shrink-0" />
+                  <span>{t('legal_aid.helpline_label')}: {entry.helpline}</span>
+                </p>
               </div>
-            );
-          })}
+
+              <div className="pt-2 border-t border-[#E7E1D3] flex items-center justify-between text-xs gap-2">
+                <span className="text-[#6E6659] text-[11px]">{entry.portalLabel}</span>
+                <a
+                  href={entry.portalUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[#B85C38] hover:text-[#9C4B2B] font-semibold flex items-center space-x-1 text-[11px] shrink-0"
+                >
+                  <span>{t('legal_aid.visit_portal')}</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Statutory Eligibility Info Box */}
+      {/* Citizen Verification Info Box */}
       <div className="bg-[#FBF8F1] border border-[#E7E1D3] rounded-2xl p-4 text-xs text-[#1E1B17] space-y-1.5">
         <div className="flex items-center space-x-2 text-[#B85C38] font-bold">
           <Info className="w-3.5 h-3.5" />

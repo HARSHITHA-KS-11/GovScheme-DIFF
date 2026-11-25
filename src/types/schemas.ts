@@ -1,91 +1,101 @@
-// LegalLens - Core Schema Definitions & Taxonomy Types
+// GovScheme Diff - Core Schema Definitions & Taxonomy Types
 
 export type DocumentCategory =
-  | 'rental/lease agreement'
-  | 'sale agreement/deed'
-  | 'employment contract'
-  | 'NDA'
-  | 'MOU'
-  | 'service/consultancy agreement'
-  | 'partnership/LLP deed'
-  | "founders'/shareholders' agreement"
-  | 'loan agreement/promissory note'
-  | 'power of attorney'
-  | 'franchise agreement'
-  | 'vendor/supplier agreement'
-  | 'gift deed'
-  | 'insurance policy'
-  | 'affidavit'
+  | 'scheme circular'
+  | 'government order'
+  | 'official notification'
+  | 'policy amendment'
+  | 'scheme guidelines'
+  | 'welfare & subsidy scheme'
+  | 'education & scholarship'
+  | 'agriculture & farmer support'
+  | 'healthcare & insurance'
+  | 'housing & infrastructure'
+  | 'employment & skill development'
+  | 'msme & business grant'
   | 'other';
 
 export const DOCUMENT_CATEGORY_ENUM: DocumentCategory[] = [
-  'rental/lease agreement',
-  'sale agreement/deed',
-  'employment contract',
-  'NDA',
-  'MOU',
-  'service/consultancy agreement',
-  'partnership/LLP deed',
-  "founders'/shareholders' agreement",
-  'loan agreement/promissory note',
-  'power of attorney',
-  'franchise agreement',
-  'vendor/supplier agreement',
-  'gift deed',
-  'insurance policy',
-  'affidavit',
+  'scheme circular',
+  'government order',
+  'official notification',
+  'policy amendment',
+  'scheme guidelines',
+  'welfare & subsidy scheme',
+  'education & scholarship',
+  'agriculture & farmer support',
+  'healthcare & insurance',
+  'housing & infrastructure',
+  'employment & skill development',
+  'msme & business grant',
   'other',
 ];
 
+export function normalizeDocumentCategory(rawCategory: string): DocumentCategory {
+  if (!rawCategory) return 'other';
+  const lower = rawCategory.toLowerCase().trim();
+  if (DOCUMENT_CATEGORY_ENUM.includes(lower as DocumentCategory)) {
+    return lower as DocumentCategory;
+  }
+  if (lower.includes('amendment') || lower.includes('corrigendum') || lower.includes('addendum')) return 'policy amendment';
+  if (lower.includes('government order') || lower.includes('office memorandum') || lower.includes('g.o')) return 'government order';
+  if (lower.includes('notification') || lower.includes('gazette')) return 'official notification';
+  if (lower.includes('guideline') || lower.includes('sop')) return 'scheme guidelines';
+  if (lower.includes('scholar') || lower.includes('education') || lower.includes('student')) return 'education & scholarship';
+  if (lower.includes('agri') || lower.includes('farmer') || lower.includes('kisan') || lower.includes('crop')) return 'agriculture & farmer support';
+  if (lower.includes('health') || lower.includes('medical') || lower.includes('insurance') || lower.includes('arogya')) return 'healthcare & insurance';
+  if (lower.includes('hous') || lower.includes('awas') || lower.includes('infrastructure')) return 'housing & infrastructure';
+  if (lower.includes('employ') || lower.includes('skill') || lower.includes('rozgar') || lower.includes('apprentice')) return 'employment & skill development';
+  if (lower.includes('msme') || lower.includes('business') || lower.includes('startup') || lower.includes('mudra')) return 'msme & business grant';
+  if (lower.includes('welfare') || lower.includes('subsidy') || lower.includes('pension') || lower.includes('ration')) return 'welfare & subsidy scheme';
+  if (lower.includes('circular') || lower.includes('scheme')) return 'scheme circular';
+  return 'other';
+}
+
 export type ClauseType =
-  | 'parties & recitals'
-  | 'term & termination'
-  | 'rent & payment'
-  | 'security deposit'
-  | 'notice period'
-  | 'maintenance & repairs'
-  | 'use & restrictions'
-  | 'indemnity & liability'
-  | 'dispute resolution'
-  | 'governing law & jurisdiction'
-  | 'stamp duty & registration'
-  | 'penalty/liquidated damages'
-  | 'confidentiality'
-  | 'limitation of liability'
-  | 'force majeure'
-  | 'assignment'
-  | 'renewal'
+  | 'scheme overview & objective'
+  | 'eligibility criteria'
+  | 'benefits & financial assistance'
+  | 'income & age limits'
+  | 'required documents'
+  | 'application process'
+  | 'deadlines & validity'
+  | 'exclusions & disqualifications'
+  | 'amendment & supersession'
+  | 'implementation & verification'
+  | 'grievance & nodal authority'
   | 'other';
 
 export const CLAUSE_TYPE_ENUM: ClauseType[] = [
-  'parties & recitals',
-  'term & termination',
-  'rent & payment',
-  'security deposit',
-  'notice period',
-  'maintenance & repairs',
-  'use & restrictions',
-  'indemnity & liability',
-  'dispute resolution',
-  'governing law & jurisdiction',
-  'stamp duty & registration',
-  'penalty/liquidated damages',
-  'confidentiality',
-  'limitation of liability',
-  'force majeure',
-  'assignment',
-  'renewal',
+  'scheme overview & objective',
+  'eligibility criteria',
+  'benefits & financial assistance',
+  'income & age limits',
+  'required documents',
+  'application process',
+  'deadlines & validity',
+  'exclusions & disqualifications',
+  'amendment & supersession',
+  'implementation & verification',
+  'grievance & nodal authority',
   'other',
 ];
 
 export function normalizeClauseType(rawType: string): ClauseType {
   if (!rawType) return 'other';
   const lower = rawType.toLowerCase().trim();
-  if (lower === 'payment/consideration' || lower === 'rent escalation') return 'rent & payment';
-  if (lower === 'indemnity') return 'indemnity & liability';
-  if (lower === 'dispute resolution/arbitration') return 'dispute resolution';
-  if (lower === 'non-compete/non-solicitation') return 'use & restrictions';
   if (CLAUSE_TYPE_ENUM.includes(lower as ClauseType)) return lower as ClauseType;
+  if (lower.includes('overview') || lower.includes('objective') || lower.includes('preamble') || lower.includes('introduction')) return 'scheme overview & objective';
+  if (lower.includes('eligib') || lower.includes('beneficiar') || lower.includes('target group')) return 'eligibility criteria';
+  if (lower.includes('benefit') || lower.includes('subsid') || lower.includes('grant') || lower.includes('assistance') || lower.includes('amount') || lower.includes('stipend') || lower.includes('pension')) return 'benefits & financial assistance';
+  if (lower.includes('income') || lower.includes('age limit') || lower.includes('ceiling') || lower.includes('threshold')) return 'income & age limits';
+  if (lower.includes('document') || lower.includes('enclosure') || lower.includes('certificate')) return 'required documents';
+  if (lower.includes('apply') || lower.includes('application') || lower.includes('portal') || lower.includes('registration') || lower.includes('procedure')) return 'application process';
+  if (lower.includes('deadline') || lower.includes('last date') || lower.includes('validity') || lower.includes('effective') || lower.includes('timeline') || lower.includes('schedule')) return 'deadlines & validity';
+  if (lower.includes('exclus') || lower.includes('disqualif') || lower.includes('ineligib') || lower.includes('restriction')) return 'exclusions & disqualifications';
+  if (lower.includes('amend') || lower.includes('supersed') || lower.includes('corrigend') || lower.includes('modif') || lower.includes('addend')) return 'amendment & supersession';
+  if (lower.includes('implement') || lower.includes('verif') || lower.includes('audit') || lower.includes('disburse') || lower.includes('monitoring')) return 'implementation & verification';
+  if (lower.includes('grievance') || lower.includes('nodal') || lower.includes('helpline') || lower.includes('appeal') || lower.includes('authority')) return 'grievance & nodal authority';
   return 'other';
 }
 
@@ -99,8 +109,17 @@ export function normalizeRiskLevel(rawRisk: string): RiskLevel {
   return 'low';
 }
 
+export type CircularDocumentKind =
+  | 'government_order'
+  | 'scheme_circular'
+  | 'notification'
+  | 'amendment'
+  | 'scheme_guidelines'
+  | 'other';
+
 export interface Guard1InputGate {
-  is_legal_document: boolean;
+  is_valid_circular: boolean;
+  document_kind?: CircularDocumentKind;
   category: DocumentCategory;
   confidence: number;
   rejection_reason?: string;
@@ -112,11 +131,13 @@ export interface SimplifiedClause {
   clause_type: ClauseType;
   title: string;
   original_text: string;
+  page_number?: number;
+  section_reference?: string;
   simple_explanation: string | null; // Plain language or null if error
   very_simple_explanation: string | null; // Ultra-simple plain language or null if error
   risk_level: RiskLevel;
   icon_name: string; // Lucide icon name for visual understanding
-  one_line_consequence: string; // Color + Icon + Plain language consequence
+  one_line_consequence: string; // Color + Icon + Plain language takeaway
   needs_review?: boolean;
   meaning_error?: boolean;
   obligations?: string[];
@@ -202,14 +223,34 @@ export interface LawyerBriefingArtifact {
   disclaimer: string;
 }
 
+export type DiffChangeType = 'added' | 'removed' | 'modified' | 'unchanged';
+
+export interface DetectedFieldChange {
+  field:
+    | 'eligibility'
+    | 'income_limit'
+    | 'age_limit'
+    | 'benefit'
+    | 'required_documents'
+    | 'deadline'
+    | 'other';
+  label: string;
+  old_value: string;
+  new_value: string;
+}
+
 export interface AlignedClausePair {
   id: string;
   clause_type: ClauseType;
   doc_a_clause?: SimplifiedClause;
   doc_b_clause?: SimplifiedClause;
   status: 'matched' | 'a_only' | 'b_only';
+  change_type?: DiffChangeType;
   similarity_score: number;
   difference_summary?: string;
+  old_text?: string;
+  new_text?: string;
+  detected_field_changes?: DetectedFieldChange[];
   risk_delta?: 'a_safer' | 'b_safer' | 'equal' | 'both_risky';
 }
 
@@ -219,6 +260,10 @@ export interface ComparisonResult {
   aligned_pairs: AlignedClausePair[];
   a_only_clauses: SimplifiedClause[];
   b_only_clauses: SimplifiedClause[];
+  added_count?: number;
+  removed_count?: number;
+  modified_count?: number;
+  unchanged_count?: number;
   key_differences_summary: string;
   winner_recommendation?: string;
   disclaimer: string;

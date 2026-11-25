@@ -127,7 +127,7 @@ export const QrCodeGenerator: React.FC<QrCodeGeneratorProps> = ({
       drawFinderEye(0, moduleCount - 7); // Top-Right
       drawFinderEye(moduleCount - 7, 0); // Bottom-Left
 
-      // 4. Draw Center LegalLens Brand Badge with Scale Icon
+      // 4. Draw Center GovScheme Diff Brand Badge with Motif Icon
       const badgeSize = canvasWidth * 0.16;
       const badgeX = (canvasWidth - badgeSize) / 2;
       const badgeY = (canvasWidth - badgeSize) / 2;

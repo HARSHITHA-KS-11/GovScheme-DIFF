@@ -68,9 +68,9 @@ async function runThreeExamplesTest() {
     const syncRes = runGuard1InputGate(ex.text);
     const asyncRes = await runGuard1InputGateAsync(ex.text);
 
-    console.log(`   Sync Rule Engine Result  : ${syncRes.is_legal_document ? '✅ ACCEPTED' : '❌ REJECTED'} (Category: ${syncRes.category})`);
-    console.log(`   Async AI Classifier Result: ${asyncRes.is_legal_document ? '✅ ACCEPTED' : '❌ REJECTED'} (Category: ${asyncRes.category}, Confidence: ${asyncRes.confidence})`);
-    if (!asyncRes.is_legal_document) {
+    console.log(`   Sync Rule Engine Result  : ${syncRes.is_valid_circular ? '✅ ACCEPTED' : '❌ REJECTED'} (Category: ${syncRes.category})`);
+    console.log(`   Async AI Classifier Result: ${asyncRes.is_valid_circular ? '✅ ACCEPTED' : '❌ REJECTED'} (Category: ${asyncRes.category}, Confidence: ${asyncRes.confidence})`);
+    if (!asyncRes.is_valid_circular) {
       console.log(`   Rejection Reason         : "${asyncRes.rejection_reason}"`);
     }
     console.log('----------------------------------------------------------------\n');

@@ -12,7 +12,7 @@ export interface RiskStyle {
   label: string;
 }
 
-export function getRiskStyle(level: RiskLevel | string, language: string = 'en'): RiskStyle {
+export function getRiskStyle(level: RiskLevel | string, _language: string = 'en'): RiskStyle {
   const normalized = (level || 'low').toLowerCase();
 
   switch (normalized) {
@@ -25,7 +25,7 @@ export function getRiskStyle(level: RiskLevel | string, language: string = 'en')
         pillText: 'text-[#991B1B]',
         iconColor: 'text-[#991B1B]',
         icon: AlertOctagon,
-        label: language === 'kn' ? 'ಹೆಚ್ಚಿನ ಅಪಾಯ' : 'High Risk',
+        label: 'Important',
       };
     case 'medium':
     case 'watch_out':
@@ -38,7 +38,7 @@ export function getRiskStyle(level: RiskLevel | string, language: string = 'en')
         pillText: 'text-[#92400E]',
         iconColor: 'text-[#92400E]',
         icon: Clock,
-        label: language === 'kn' ? 'ಎಚ್ಚರಿಕೆ' : 'Watch Out',
+        label: 'Check Carefully',
       };
     case 'low':
     default:
@@ -50,7 +50,7 @@ export function getRiskStyle(level: RiskLevel | string, language: string = 'en')
         pillText: 'text-[#065F46]',
         iconColor: 'text-[#065F46]',
         icon: CheckCircle2,
-        label: language === 'kn' ? 'ಕಡಿಮೆ ಅಪಾಯ' : 'Low Risk',
+        label: 'Standard Info',
       };
   }
 }

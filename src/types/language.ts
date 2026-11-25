@@ -1,1 +1,1 @@
-export type SupportedLanguage = 'en' | 'hi' | 'kn';
+export type SupportedLanguage = 'en';

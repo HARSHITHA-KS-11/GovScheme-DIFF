@@ -220,19 +220,13 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
         const arrayBuffer = await file.arrayBuffer();
         const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
         if (pdfDoc.isEncrypted) {
-          const encMsg = language === 'hi'
-            ? 'दस्तावेज़ A: पासवर्ड से सुरक्षित PDF। कृपया एक अनएंक्रिप्टेड दस्तावेज़ अपलोड करें।'
-            : 'Document A: Password-protected PDF detected. Please upload an unencrypted document.';
-          setDocAError(encMsg);
+          setDocAError('Document A: Password-protected PDF detected. Please upload an unencrypted circular.');
           setDocAExtractedText('');
           setIsExtractingA(false);
           return;
         }
         if (pdfDoc.getPageCount() > MAX_PDF_PAGES) {
-          const limitMsg = language === 'hi'
-            ? `दस्तावेज़ A: ${MAX_PDF_PAGES_ERROR_MSG_HI}`
-            : `Document A: ${MAX_PDF_PAGES_ERROR_MSG}`;
-          setDocAError(limitMsg);
+          setDocAError(`Document A: ${MAX_PDF_PAGES_ERROR_MSG}`);
           setDocAExtractedText('');
           setIsExtractingA(false);
           return;
@@ -270,19 +264,13 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
         const arrayBuffer = await file.arrayBuffer();
         const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
         if (pdfDoc.isEncrypted) {
-          const encMsg = language === 'hi'
-            ? 'दस्तावेज़ B: पासवर्ड से सुरक्षित PDF। कृपया एक अनएंक्रिप्टेड दस्तावेज़ अपलोड करें।'
-            : 'Document B: Password-protected PDF detected. Please upload an unencrypted document.';
-          setDocBError(encMsg);
+          setDocBError('Document B: Password-protected PDF detected. Please upload an unencrypted circular.');
           setDocBExtractedText('');
           setIsExtractingB(false);
           return;
         }
         if (pdfDoc.getPageCount() > MAX_PDF_PAGES) {
-          const limitMsg = language === 'hi'
-            ? `दस्तावेज़ B: ${MAX_PDF_PAGES_ERROR_MSG_HI}`
-            : `Document B: ${MAX_PDF_PAGES_ERROR_MSG}`;
-          setDocBError(limitMsg);
+          setDocBError(`Document B: ${MAX_PDF_PAGES_ERROR_MSG}`);
           setDocBExtractedText('');
           setIsExtractingB(false);
           return;
@@ -362,19 +350,11 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
 
   const effectiveDocAError =
     docAError ||
-    (isDocAWordExceeded
-      ? language === 'hi'
-        ? `दस्तावेज़ A: ${MAX_PASTED_WORDS_ERROR_MSG_HI}`
-        : `Document A: ${MAX_PASTED_WORDS_ERROR_MSG}`
-      : null);
+    (isDocAWordExceeded ? `Document A: ${MAX_PASTED_WORDS_ERROR_MSG}` : null);
 
   const effectiveDocBError =
     docBError ||
-    (isDocBWordExceeded
-      ? language === 'hi'
-        ? `दस्तावेज़ B: ${MAX_PASTED_WORDS_ERROR_MSG_HI}`
-        : `Document B: ${MAX_PASTED_WORDS_ERROR_MSG}`
-      : null);
+    (isDocBWordExceeded ? `Document B: ${MAX_PASTED_WORDS_ERROR_MSG}` : null);
 
   const isCompareDisabled =
     !hasDocA ||
@@ -434,7 +414,6 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
     }, 100);
 
     const formatDocumentRejectReason = (rawError: string, docLabel: string): string => {
-      const isHindi = language === 'hi';
       let cleanMsg = rawError
         .replace(/^Error:\s*/i, '')
         .replace(/^Document rejected by Guard 1:\s*/i, '')
@@ -445,19 +424,15 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
         cleanMsg.toLowerCase().includes('analysis failed') ||
         cleanMsg.toLowerCase().includes('failed to analyze')
       ) {
-        cleanMsg = isHindi
-          ? 'यह एक वैध कानूनी दस्तावेज़ नहीं लगता है। कृपया एक वैध कानूनी समझौता अपलोड करें या पेस्ट करें।'
-          : 'this does not appear to be a valid legal document. Please upload or paste a legal agreement.';
+        cleanMsg = 'this does not appear to be a valid government circular or scheme guideline. Please upload or paste an official government circular.';
       } else {
         const lower = cleanMsg.toLowerCase();
-        if (!lower.includes('legal agreement') && !lower.includes('कानूनी')) {
-          cleanMsg = isHindi
-            ? `${cleanMsg} (कृपया एक वैध कानूनी समझौता अपलोड करें या पेस्ट करें।)`
-            : `${cleanMsg}. Please upload or paste a legal agreement.`;
+        if (!lower.includes('government circular') && !lower.includes('scheme')) {
+          cleanMsg = `${cleanMsg}. Please upload or paste a valid government circular.`;
         }
       }
 
-      const prefix = isHindi ? `${docLabel} की तुलना नहीं की जा सकी:` : `${docLabel} could not be compared:`;
+      const prefix = `${docLabel} could not be compared:`;
       if (!cleanMsg.toLowerCase().includes(docLabel.toLowerCase())) {
         return `${prefix} ${cleanMsg}`;
       }
@@ -467,8 +442,8 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
     try {
       const textA = activeTextA;
       const textB = activeTextB;
-      const docALabel = language === 'hi' ? 'दस्तावेज़ A' : 'Document A';
-      const docBLabel = language === 'hi' ? 'दस्तावेज़ B' : 'Document B';
+      const docALabel = 'Circular A';
+      const docBLabel = 'Circular B';
 
       // Parallelize Document A & Document B Guard 1 legal classification & analysis
       const [resA, resB] = await Promise.allSettled([
@@ -485,9 +460,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
         setDocAError(cleanA);
         setDocBError(cleanB);
         setErrorMessage(
-          language === 'hi'
-            ? `तुलना त्रुटि — दोनों दस्तावेज़ कानूनी सत्यापन में विफल रहे:\n• ${cleanA}\n• ${cleanB}`
-            : `Comparison Error — Both documents failed legal validation:\n• ${cleanA}\n• ${cleanB}`
+          `Comparison Error — Both documents failed government circular validation:\n• ${cleanA}\n• ${cleanB}`
         );
         return;
       }
@@ -612,13 +585,13 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                   title="Clear inputs and start fresh comparison"
                 >
                   <Trash2 className="w-3 h-3" />
-                  <span>{language === 'hi' ? 'रीसेट करें' : 'Start Fresh'}</span>
+                  <span>Start Fresh</span>
                 </button>
               )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {/* Document A Slot */}
+              {/* Circular A Slot */}
               <div
                 id="doc-a-slot-container"
                 className={`space-y-2 p-3.5 rounded-2xl transition-all duration-200 ${effectiveDocAError
@@ -637,13 +610,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                       type="button"
                       disabled={hasDocAFile}
                       onClick={() => !hasDocAFile && setDocAMode('paste')}
-                      title={
-                        hasDocAFile
-                          ? language === 'hi'
-                            ? 'पाठ चिपकाने के लिए पहले अपलोड की गई फ़ाइल साफ़ करें'
-                            : 'Clear uploaded file to paste text instead'
-                          : undefined
-                      }
+                      title={hasDocAFile ? 'Clear uploaded file to paste text instead' : undefined}
                       className={`px-2 py-0.5 rounded-md transition-all flex items-center space-x-1 ${hasDocAFile
                           ? 'opacity-40 cursor-not-allowed text-[#6E6659] select-none'
                           : docAMode === 'paste'
@@ -652,20 +619,14 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                         }`}
                     >
                       <FileText className="w-3 h-3" />
-                      <span>{language === 'hi' ? 'टेक्स्ट पेस्ट करें' : 'Paste Text'}</span>
+                      <span>Paste Text</span>
                     </button>
 
                     <button
                       type="button"
                       disabled={hasDocAPastedText}
                       onClick={() => !hasDocAPastedText && setDocAMode('upload')}
-                      title={
-                        hasDocAPastedText
-                          ? language === 'hi'
-                            ? 'फ़ाइल अपलोड करने के लिए पहले चिपकाया गया पाठ साफ़ करें'
-                            : 'Clear pasted text to upload a file instead'
-                          : undefined
-                      }
+                      title={hasDocAPastedText ? 'Clear pasted text to upload a file instead' : undefined}
                       className={`px-2 py-0.5 rounded-md transition-all flex items-center space-x-1 ${hasDocAPastedText
                           ? 'opacity-40 cursor-not-allowed text-[#6E6659] select-none'
                           : docAMode === 'upload'
@@ -674,7 +635,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                         }`}
                     >
                       <Upload className="w-3 h-3" />
-                      <span>{language === 'hi' ? 'फ़ाइल अपलोड करें' : 'Upload File'}</span>
+                      <span>Upload File</span>
                     </button>
                   </div>
                 </div>
@@ -684,8 +645,8 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                   <div className="text-[10px] text-[#065F46] bg-[#D1FAE5] px-2 py-0.5 rounded border border-[#6EE7B7] flex items-center justify-between">
                     <span className="font-semibold truncate">
                       {docAMode === 'upload' && (docAFile || docAFileName)
-                        ? `📄 Doc A: "${docAFile?.name || docAFileName}" (${docAFile ? formatFileSize(docAFile.size) + ' • ' : ''}${countWords(docAExtractedText)} ${language === 'hi' ? 'शब्द' : countWords(docAExtractedText) === 1 ? 'word' : 'words'})`
-                        : `📝 Doc A: Pasted Text (${countWords(activeTextA)} ${language === 'hi' ? 'शब्द' : countWords(activeTextA) === 1 ? 'word' : 'words'})`}
+                        ? `📄 Circular A: "${docAFile?.name || docAFileName}" (${docAFile ? formatFileSize(docAFile.size) + ' • ' : ''}${countWords(docAExtractedText)} ${countWords(docAExtractedText) === 1 ? 'word' : 'words'})`
+                        : `📝 Circular A: Pasted Text (${countWords(activeTextA)} ${countWords(activeTextA) === 1 ? 'word' : 'words'})`}
                     </span>
                     {docAMode === 'upload' && (docAFile || docAFileName) && (
                       <button
@@ -742,10 +703,10 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                           />
                           <UploadCloud className="w-6 h-6 mx-auto text-[#B85C38] group-hover:scale-110 transition-transform duration-200 mb-1" />
                           <p className="text-xs font-semibold text-[#1E1B17]">
-                            {language === 'hi' ? 'PDF, DOCX, TXT या इमेज ड्रैग करें' : 'Drag & drop PDF, DOCX, TXT or image'}
+                            Drag & drop PDF, DOCX, TXT or image
                           </p>
                           <p className="text-[10px] text-[#6E6659] mt-0.5">
-                            {language === 'hi' ? 'या फ़ाइल चुनने के लिए क्लिक करें' : 'or click to browse from device'}
+                            or click to browse from device
                           </p>
                         </div>
                       ) : (
@@ -772,7 +733,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                           {isExtractingA && (
                             <div className="flex items-center space-x-2 text-xs text-[#B85C38]">
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>{language === 'hi' ? 'पाठ निकाला जा रहा है...' : 'Extracting document text...'}</span>
+                              <span>Extracting circular text...</span>
                             </div>
                           )}
 
@@ -814,13 +775,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                       type="button"
                       disabled={hasDocBFile}
                       onClick={() => !hasDocBFile && setDocBMode('paste')}
-                      title={
-                        hasDocBFile
-                          ? language === 'hi'
-                            ? 'पाठ चिपकाने के लिए पहले अपलोड की गई फ़ाइल साफ़ करें'
-                            : 'Clear uploaded file to paste text instead'
-                          : undefined
-                      }
+                      title={hasDocBFile ? 'Clear uploaded file to paste text instead' : undefined}
                       className={`px-2 py-0.5 rounded-md transition-all flex items-center space-x-1 ${hasDocBFile
                           ? 'opacity-40 cursor-not-allowed text-[#6E6659] select-none'
                           : docBMode === 'paste'
@@ -829,20 +784,14 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                         }`}
                     >
                       <FileText className="w-3 h-3" />
-                      <span>{language === 'hi' ? 'टेक्स्ट पेस्ट करें' : 'Paste Text'}</span>
+                      <span>Paste Text</span>
                     </button>
 
                     <button
                       type="button"
                       disabled={hasDocBPastedText}
                       onClick={() => !hasDocBPastedText && setDocBMode('upload')}
-                      title={
-                        hasDocBPastedText
-                          ? language === 'hi'
-                            ? 'फ़ाइल अपलोड करने के लिए पहले चिपकाया गया पाठ साफ़ करें'
-                            : 'Clear pasted text to upload a file instead'
-                          : undefined
-                      }
+                      title={hasDocBPastedText ? 'Clear pasted text to upload a file instead' : undefined}
                       className={`px-2 py-0.5 rounded-md transition-all flex items-center space-x-1 ${hasDocBPastedText
                           ? 'opacity-40 cursor-not-allowed text-[#6E6659] select-none'
                           : docBMode === 'upload'
@@ -851,7 +800,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                         }`}
                     >
                       <Upload className="w-3 h-3" />
-                      <span>{language === 'hi' ? 'फ़ाइल अपलोड करें' : 'Upload File'}</span>
+                      <span>Upload File</span>
                     </button>
                   </div>
                 </div>
@@ -861,8 +810,8 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                   <div className="text-[10px] text-[#065F46] bg-[#D1FAE5] px-2 py-0.5 rounded border border-[#6EE7B7] flex items-center justify-between">
                     <span className="font-semibold truncate">
                       {docBMode === 'upload' && (docBFile || docBFileName)
-                        ? `📄 Doc B: "${docBFile?.name || docBFileName}" (${docBFile ? formatFileSize(docBFile.size) + ' • ' : ''}${countWords(docBExtractedText)} ${language === 'hi' ? 'शब्द' : countWords(docBExtractedText) === 1 ? 'word' : 'words'})`
-                        : `📝 Doc B: Pasted Text (${countWords(activeTextB)} ${language === 'hi' ? 'शब्द' : countWords(activeTextB) === 1 ? 'word' : 'words'})`}
+                        ? `📄 Circular B: "${docBFile?.name || docBFileName}" (${docBFile ? formatFileSize(docBFile.size) + ' • ' : ''}${countWords(docBExtractedText)} ${countWords(docBExtractedText) === 1 ? 'word' : 'words'})`
+                        : `📝 Circular B: Pasted Text (${countWords(activeTextB)} ${countWords(activeTextB) === 1 ? 'word' : 'words'})`}
                     </span>
                     {docBMode === 'upload' && (docBFile || docBFileName) && (
                       <button
@@ -919,10 +868,10 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                           />
                           <UploadCloud className="w-6 h-6 mx-auto text-[#B85C38] group-hover:scale-110 transition-transform duration-200 mb-1" />
                           <p className="text-xs font-semibold text-[#1E1B17]">
-                            {language === 'hi' ? 'PDF, DOCX, TXT या इमेज ड्रैग करें' : 'Drag & drop PDF, DOCX, TXT or image'}
+                            Drag & drop PDF, DOCX, TXT or image
                           </p>
                           <p className="text-[10px] text-[#6E6659] mt-0.5">
-                            {language === 'hi' ? 'या फ़ाइल चुनने के लिए क्लिक करें' : 'or click to browse from device'}
+                            or click to browse from device
                           </p>
                         </div>
                       ) : (
@@ -949,7 +898,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                           {isExtractingB && (
                             <div className="flex items-center space-x-2 text-xs text-[#B85C38]">
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>{language === 'hi' ? 'पाठ निकाला जा रहा है...' : 'Extracting document text...'}</span>
+                              <span>Extracting circular text...</span>
                             </div>
                           )}
 
@@ -1027,83 +976,150 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
           {/* Comparison Results */}
           {comparisonResult && (
             <div id="comparison-results-container" className="space-y-5 scroll-mt-28">
-              {/* Winner / Key Takeaway Card */}
-              <div className="bg-[#FBF8F1] border border-[#E7E1D3] rounded-2xl p-5 shadow-xs space-y-2">
-                <div className="flex items-center space-x-2 text-[#B85C38] font-bold text-xs">
-                  <Sparkles className="w-4 h-4" />
-                  <span>Comparison Recommendation</span>
+              {/* Deterministic Circular Diff Summary Card */}
+              <div className="bg-[#FBF8F1] border border-[#E7E1D3] rounded-2xl p-5 shadow-xs space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center space-x-2 text-[#B85C38] font-bold text-xs">
+                    <GitCompare className="w-4 h-4" />
+                    <span>Circular Diff Summary</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
+                    <span className="px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#065F46] border border-[#6EE7B7]">
+                      Added: {comparisonResult.added_count ?? (comparisonResult.aligned_pairs || []).filter((p) => p.change_type === 'added' || p.status === 'b_only').length}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-[#FFF5F5] text-[#991B1B] border border-[#FCA5A5]">
+                      Removed: {comparisonResult.removed_count ?? (comparisonResult.aligned_pairs || []).filter((p) => p.change_type === 'removed' || p.status === 'a_only').length}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]">
+                      Modified: {comparisonResult.modified_count ?? (comparisonResult.aligned_pairs || []).filter((p) => p.change_type === 'modified').length}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-[#F6F1E7] text-[#6E6659] border border-[#E7E1D3]">
+                      Unchanged: {comparisonResult.unchanged_count ?? (comparisonResult.aligned_pairs || []).filter((p) => p.change_type === 'unchanged').length}
+                    </span>
+                  </div>
                 </div>
-                <p className="text-sm font-semibold text-[#1E1B17]">{comparisonResult.winner_recommendation}</p>
-                <p className="text-xs text-[#6E6659]">{comparisonResult.key_differences_summary}</p>
+                <p className="text-xs sm:text-sm text-[#1E1B17] whitespace-pre-line leading-relaxed">
+                  {comparisonResult.key_differences_summary}
+                </p>
               </div>
 
-              {/* Aligned Clauses Table */}
+              {/* Section-by-Section Exact Old vs New Diff */}
               <div className="bg-[#FBF8F1] border border-[#E7E1D3] rounded-2xl p-5 md:p-6 shadow-xs space-y-4">
-                <h3 className="text-sm font-bold font-heading text-[#1E1B17]">Clause-by-Clause Comparison</h3>
+                <h3 className="text-sm font-bold font-heading text-[#1E1B17]">Section-by-Section Policy Comparison</h3>
 
                 <div className="space-y-3">
-                  {(comparisonResult?.aligned_pairs || []).map((pair) => (
-                    <div
-                      key={pair.id}
-                      className={`p-4 rounded-xl border transition-all ${pair.status === 'matched'
-                          ? 'bg-[#F6F1E7] border-[#E7E1D3]'
-                          : pair.status === 'a_only'
-                            ? 'bg-[#FEF3C7] border-[#FDE68A]'
-                            : 'bg-[#F6F1E7] border-[#E7E1D3]'
-                        }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] font-bold uppercase text-[#B85C38] bg-[#B85C38]/10 px-2 py-0.5 rounded border border-[#B85C38]/20">
-                          {pair.doc_a_clause?.clause_type || pair.doc_b_clause?.clause_type || pair.clause_type}
-                        </span>
+                  {(comparisonResult?.aligned_pairs || []).map((pair) => {
+                    const effectiveChange =
+                      pair.change_type ||
+                      (pair.status === 'b_only' ? 'added' : pair.status === 'a_only' ? 'removed' : 'modified');
+                    const oldText = pair.old_text ?? pair.doc_a_clause?.original_text;
+                    const newText = pair.new_text ?? pair.doc_b_clause?.original_text;
+                    const fieldChanges = pair.detected_field_changes || [];
 
-                        {pair.status === 'matched' && (
-                          <span className="text-[11px] font-semibold text-[#065F46] flex items-center space-x-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Matched Clause ({Math.round(pair.similarity_score * 100)}% similarity)</span>
-                          </span>
-                        )}
-                        {pair.status === 'a_only' && (
-                          <span className="text-[11px] font-bold text-[#92400E] flex items-center space-x-1">
-                            <AlertTriangle className="w-3.5 h-3.5" />
-                            <span>Present ONLY in Document A (Missing in B)</span>
-                          </span>
-                        )}
-                        {pair.status === 'b_only' && (
-                          <span className="text-[11px] font-bold text-[#1E1B17] flex items-center space-x-1">
-                            <Sparkles className="w-3.5 h-3.5 text-[#B85C38]" />
-                            <span>Present ONLY in Document B (Missing in A)</span>
-                          </span>
-                        )}
-                      </div>
+                    const cardBg =
+                      effectiveChange === 'added'
+                        ? 'bg-[#ECFDF5]/60 border-[#6EE7B7]'
+                        : effectiveChange === 'removed'
+                          ? 'bg-[#FFF5F5]/70 border-[#FCA5A5]'
+                          : effectiveChange === 'modified'
+                            ? 'bg-[#FFFBEB]/70 border-[#FDE68A]'
+                            : 'bg-[#F6F1E7] border-[#E7E1D3]';
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                        {/* Doc A Side */}
-                        <div className="p-3 bg-[#FBF8F1] rounded-lg border border-[#E7E1D3]">
-                          <div className="font-bold text-[#1E1B17] mb-1">
-                            Doc A: {pair.doc_a_clause ? (pair.doc_a_clause.title || pair.doc_a_clause.clause_type || 'Clause') : '—'}
-                          </div>
-                          <p className="text-[#6E6659]">
-                            {pair.doc_a_clause
-                              ? (pair.doc_a_clause.simple_explanation || 'Meaning temporarily unavailable for this clause.')
-                              : 'No matching clause in Document A.'}
-                          </p>
+                    const badgeStyle =
+                      effectiveChange === 'added'
+                        ? 'bg-[#D1FAE5] text-[#065F46] border-[#6EE7B7]'
+                        : effectiveChange === 'removed'
+                          ? 'bg-[#FEE2E2] text-[#991B1B] border-[#FCA5A5]'
+                          : effectiveChange === 'modified'
+                            ? 'bg-[#FEF3C7] text-[#92400E] border-[#FDE68A]'
+                            : 'bg-[#FBF8F1] text-[#6E6659] border-[#E7E1D3]';
+
+                    const badgeLabel =
+                      effectiveChange === 'added'
+                        ? 'Added'
+                        : effectiveChange === 'removed'
+                          ? 'Removed'
+                          : effectiveChange === 'modified'
+                            ? 'Modified'
+                            : 'Unchanged';
+
+                    return (
+                      <div key={pair.id} className={`p-4 rounded-xl border transition-all space-y-3 ${cardBg}`}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[10px] font-bold uppercase text-[#B85C38] bg-[#B85C38]/10 px-2 py-0.5 rounded border border-[#B85C38]/20">
+                            {pair.doc_b_clause?.clause_type || pair.doc_a_clause?.clause_type || pair.clause_type}
+                          </span>
+
+                          <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${badgeStyle}`}>
+                            {badgeLabel}
+                            {effectiveChange === 'modified' ? ` (${Math.round(pair.similarity_score * 100)}% overlap)` : ''}
+                          </span>
                         </div>
 
-                        {/* Doc B Side */}
-                        <div className="p-3 bg-[#FBF8F1] rounded-lg border border-[#E7E1D3]">
-                          <div className="font-bold text-[#1E1B17] mb-1">
-                            Doc B: {pair.doc_b_clause ? (pair.doc_b_clause.title || pair.doc_b_clause.clause_type || 'Clause') : '—'}
-                          </div>
-                          <p className="text-[#6E6659]">
-                            {pair.doc_b_clause
-                              ? (pair.doc_b_clause.simple_explanation || 'Meaning temporarily unavailable for this clause.')
-                              : 'No matching clause in Document B.'}
+                        {pair.difference_summary && (
+                          <p className="text-xs font-semibold text-[#1E1B17] leading-relaxed">
+                            {pair.difference_summary}
                           </p>
+                        )}
+
+                        {fieldChanges.length > 0 && (
+                          <div className="bg-[#FBF8F1] border border-[#E7E1D3] rounded-lg p-3 space-y-1.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-[#B85C38]">
+                              Detected Policy Changes
+                            </div>
+                            <div className="space-y-1 text-xs">
+                              {fieldChanges.map((fc, idx) => (
+                                <div key={idx} className="flex flex-wrap items-baseline gap-1.5">
+                                  <span className="font-bold text-[#1E1B17]">{fc.label}:</span>
+                                  <span className="text-[#991B1B] line-through">{fc.old_value}</span>
+                                  <span className="text-[#6E6659]">→</span>
+                                  <span className="text-[#065F46] font-semibold">{fc.new_value}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                          {/* Circular A (Old Text) */}
+                          <div className="p-3 bg-[#FBF8F1] rounded-lg border border-[#E7E1D3] space-y-1">
+                            <div className="font-bold text-[#1E1B17] flex items-center justify-between gap-2">
+                              <span>
+                                Circular A (Old): {pair.doc_a_clause ? (pair.doc_a_clause.title || pair.doc_a_clause.clause_type) : '—'}
+                              </span>
+                              {pair.doc_a_clause?.page_number && (
+                                <span className="text-[10px] font-mono text-[#6E6659] shrink-0">
+                                  Page {pair.doc_a_clause.page_number}
+                                  {pair.doc_a_clause.section_reference ? ` • ${pair.doc_a_clause.section_reference}` : ''}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[#1E1B17] whitespace-pre-wrap leading-relaxed">
+                              {oldText || 'Not present in Circular A.'}
+                            </p>
+                          </div>
+
+                          {/* Circular B (New Text) */}
+                          <div className="p-3 bg-[#FBF8F1] rounded-lg border border-[#E7E1D3] space-y-1">
+                            <div className="font-bold text-[#1E1B17] flex items-center justify-between gap-2">
+                              <span>
+                                Circular B (New): {pair.doc_b_clause ? (pair.doc_b_clause.title || pair.doc_b_clause.clause_type) : '—'}
+                              </span>
+                              {pair.doc_b_clause?.page_number && (
+                                <span className="text-[10px] font-mono text-[#6E6659] shrink-0">
+                                  Page {pair.doc_b_clause.page_number}
+                                  {pair.doc_b_clause.section_reference ? ` • ${pair.doc_b_clause.section_reference}` : ''}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[#1E1B17] whitespace-pre-wrap leading-relaxed">
+                              {newText || 'Removed in Circular B.'}
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>

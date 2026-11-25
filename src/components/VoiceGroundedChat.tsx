@@ -37,9 +37,7 @@ export const VoiceGroundedChat: React.FC<VoiceGroundedChatProps> = ({
     {
       id: 'welcome_1',
       sender: 'assistant',
-      text: language === 'hi'
-        ? `नमस्ते! मैं आपका लीगललेंस वॉयस सहायक हूँ। मैं आपके अनुबंध (${document.document_title}) के आधार पर प्रश्नों का उत्तर दे सकता हूँ!`
-        : `Hello! I am your GovScheme Diff Voice Assistant. I can answer questions grounded in this scheme circular (${document.document_title}). Ask about eligibility, benefits, or deadlines.`,
+      text: `1. Hello! I am your GovScheme Diff Voice Assistant.\n2. Ask questions grounded in this scheme circular (${document.document_title}).\n3. I explain eligibility, benefits, required documents, and deadlines in simple everyday English.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -83,9 +81,7 @@ export const VoiceGroundedChat: React.FC<VoiceGroundedChatProps> = ({
         {
           id: `err_${Date.now()}`,
           sender: 'assistant',
-          text: language === 'hi'
-            ? 'क्षमा करें, आपके प्रश्न को संसाधित करने में त्रुटि हुई। कृपया पुनः प्रयास करें।'
-            : 'Sorry, I encountered an error processing your query. Please try again.',
+          text: 'Sorry, I encountered an error processing your query. Please try again.',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
@@ -179,7 +175,7 @@ export const VoiceGroundedChat: React.FC<VoiceGroundedChatProps> = ({
           </div>
           <div>
             <h3 className="text-sm font-bold font-heading text-[#1E1B17]">Voice & Grounded Q&A</h3>
-            <p className="text-[10px] text-[#6E6659]">RAG-Grounded strictly in retrieved document clauses</p>
+            <p className="text-[10px] text-[#6E6659]">3-point simple English answers grounded in uploaded circular sections</p>
           </div>
         </div>
 
@@ -235,7 +231,7 @@ export const VoiceGroundedChat: React.FC<VoiceGroundedChatProps> = ({
                         className="text-[10px] bg-[#FBF8F1] hover:bg-[#E7E1D3]/60 text-[#B85C38] px-2 py-0.5 rounded border border-[#E7E1D3] font-semibold flex items-center space-x-1"
                       >
                         <Search className="w-2.5 h-2.5 text-[#065F46]" />
-                        <span>Clause {cid.replace(/[^\d]/g, '') || cid}</span>
+                        <span>Section {cid.replace(/[^\d]/g, '') || cid}</span>
                       </button>
                     ))}
                   </div>

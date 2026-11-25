@@ -133,31 +133,19 @@ export class SpeechEngine {
     utterance.rate = 0.95; // Slightly slower, clear tone for accessible reading
     utterance.pitch = 1.0;
 
-    const isHindi = lang === 'hi' || lang === 'hi-IN';
-    utterance.lang = isHindi ? 'hi-IN' : 'en-US';
+    utterance.lang = 'en-US';
 
-    // Pick Hindi or English voice instantly from cached voices (0ms lookup)
+    // Pick English voice instantly from cached voices (0ms lookup)
     try {
       const voices = this.cachedVoices.length > 0 ? this.cachedVoices : (this.synth.getVoices() || []);
       let preferredVoice: SpeechSynthesisVoice | undefined;
 
       if (voices.length > 0) {
-        if (isHindi) {
-          preferredVoice =
-            voices.find((v) => v.lang.includes('hi-IN') || v.lang.includes('hi_IN') || v.lang.startsWith('hi')) ||
-            voices.find((v) => v.name.toLowerCase().includes('hindi')) ||
-            voices.find((v) => v.lang.includes('IN'));
-
-          if (!preferredVoice || (!preferredVoice.lang.includes('hi') && !preferredVoice.name.toLowerCase().includes('hindi'))) {
-            preferredVoice = voices.find((v) => v.default) || voices[0];
-          }
-        } else {
-          preferredVoice =
-            voices.find((v) => v.lang.includes('en-IN') || v.lang.includes('en_IN')) ||
-            voices.find((v) => v.lang.startsWith('en')) ||
-            voices.find((v) => v.default) ||
-            voices[0];
-        }
+        preferredVoice =
+          voices.find((v) => v.lang.includes('en-IN') || v.lang.includes('en_IN')) ||
+          voices.find((v) => v.lang.startsWith('en')) ||
+          voices.find((v) => v.default) ||
+          voices[0];
 
         if (preferredVoice) {
           utterance.voice = preferredVoice;
@@ -265,8 +253,7 @@ export class SpeechEngine {
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    const isHindi = lang === 'hi' || lang === 'hi-IN';
-    recognition.lang = isHindi ? 'hi-IN' : 'en-US';
+    recognition.lang = 'en-US';
 
     let finalTranscript = '';
     let silenceTimer: any = null;

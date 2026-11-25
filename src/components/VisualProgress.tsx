@@ -67,17 +67,11 @@ export const VisualProgress: React.FC<VisualProgressProps> = ({
           </div>
           <div>
             <h3 className="text-sm font-bold font-heading text-[#1E1B17]">
-              {hasFailed
-                ? language === 'hi'
-                  ? 'दस्तावेज़ पाइपलाइन विश्लेषण - त्रुटि'
-                  : 'Document Pipeline Analysis — Halt'
-                : t('pipeline.title')}
+              {hasFailed ? 'Circular Analysis — Halt' : t('pipeline.title')}
             </h3>
             <p className="text-xs text-[#6E6659]">
               {hasFailed
-                ? language === 'hi'
-                  ? `चरण ${failedIdx + 1} पर ऑडिट रुक गया (${STEPS[failedIdx]?.label || 'Guard 1'})`
-                  : `Audit stopped at Step ${failedIdx + 1}: ${STEPS[failedIdx]?.label || 'Guard 1'}`
+                ? `Analysis stopped at Step ${failedIdx + 1}: ${STEPS[failedIdx]?.label || 'Circular Gate'}`
                 : t('pipeline.subtitle')}
             </p>
           </div>
@@ -99,7 +93,7 @@ export const VisualProgress: React.FC<VisualProgressProps> = ({
             <span className="text-xs font-bold text-[#991B1B] bg-[#991B1B]/10 px-2.5 py-1 rounded-lg border border-[#FCA5A5] font-mono flex items-center space-x-1">
               <X className="w-3.5 h-3.5 text-[#991B1B] stroke-[3]" />
               <span>
-                {language === 'hi' ? `चरण ${failedIdx + 1} पर विफल` : `FAILED AT STEP ${failedIdx + 1}`}
+                {`FAILED AT STEP ${failedIdx + 1}`}
               </span>
             </span>
           ) : (
@@ -178,7 +172,7 @@ export const VisualProgress: React.FC<VisualProgressProps> = ({
 
               {isFailed && (
                 <span className="text-[9px] font-bold font-mono text-[#991B1B] uppercase mt-0.5 bg-[#991B1B]/10 px-1 py-0.2 rounded border border-[#FCA5A5]/60">
-                  {language === 'hi' ? 'विफल' : 'FAILED'}
+                  FAILED
                 </span>
               )}
 

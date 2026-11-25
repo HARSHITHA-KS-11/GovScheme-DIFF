@@ -2,28 +2,31 @@ import { synthesizeDocumentAnalysis } from '../services/astraBackend';
 import { Guard1InputGate, SimplifiedClause } from '../../../src/types/schemas';
 
 const canaryGuard1: Guard1InputGate = {
-  is_legal_document: true,
-  category: 'employment contract',
+  is_valid_circular: true,
+  document_kind: 'scheme_circular',
+  category: 'welfare & subsidy scheme',
   confidence: 0.99,
 };
 
 const canaryClause: SimplifiedClause = {
   id: 'clause_canary_1',
   clause_number: '1',
-  clause_type: 'notice period',
-  title: 'NOTICE PERIOD CANARY',
-  original_text: 'Post-confirmation, either party shall provide 90 (ninety) days written notice to terminate employment.',
+  page_number: 1,
+  section_reference: 'Section 1',
+  clause_type: 'deadlines & validity',
+  title: 'APPLICATION DEADLINE CANARY',
+  original_text: 'Eligible beneficiaries must submit applications online before 31 May 2026.',
   simple_explanation: null,
   very_simple_explanation: null,
   risk_level: 'watch_out',
   icon_name: 'Clock',
-  one_line_consequence: 'Requires 90 days written notice before exit.',
+  one_line_consequence: 'Check Carefully: Application must be submitted before 31 May 2026.',
 };
 
 async function test() {
-  const sampleText = `EMPLOYMENT AGREEMENT\n1. NOTICE PERIOD: Post-confirmation, either party shall provide 90 (ninety) days written notice to terminate employment.`;
+  const sampleText = `GOVERNMENT CIRCULAR No. SW-101/2026\n1. APPLICATION DEADLINE: Eligible beneficiaries must submit applications online before 31 May 2026.`;
   const result = await synthesizeDocumentAnalysis(sampleText, [canaryClause], canaryGuard1, undefined, 'en');
-  console.log('RESULT CLAUSES:', JSON.stringify(result.clauses, null, 2));
+  console.log('RESULT SECTIONS:', JSON.stringify(result.clauses, null, 2));
 }
 
 test();
