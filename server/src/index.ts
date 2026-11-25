@@ -59,6 +59,16 @@ const upload = multer({
 
 import crypto from 'crypto';
 import { getConfig } from './config/env';
+import { connectDatabase, getDatabaseStatus, sanitizeMongoMessage } from './config/db';
+import {
+  saveOrReuseCircularAnalysis,
+  saveOrReuseComparisonHistory,
+  listCircularsWithHistory,
+  getCircularByIdWithVersions,
+  getCircularVersionById,
+  listComparisonHistory,
+  getComparisonHistoryById,
+} from './services/circularHistoryService';
 
 // Initialize Zod environment configuration
 getConfig();
@@ -78,6 +88,7 @@ app.get(['/api/health', '/health'], (req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
     service: 'GovScheme Diff Engine',
     version: '1.0.0',
+    database: getDatabaseStatus(),
   });
 });
 
@@ -307,9 +318,31 @@ app.post('/api/analyze', (req: Request, res: Response, next: any) => {
       const elapsed4 = Math.max(1, Date.now() - t4);
       await sendEvent('progress', { stage: 'ai_synthesis', stageIndex: 4, status: 'completed', elapsed_ms: elapsed4 });
 
+      // Persist analyzed circular + version lineage (skip sample demo runs)
+      let payloadToSend: any = fullResult;
+      const requestedSourceType = req.body?.sourceType;
+      if (requestedSourceType !== 'sample' && fullResult) {
+        try {
+          const sourceType = req.file ? 'upload' : req.body?.fileData ? 'camera' : 'paste';
+          const persistence = await saveOrReuseCircularAnalysis({
+            extractedText: documentText,
+            analysisResult: fullResult,
+            sourceType,
+            sourceFilename: req.file?.originalname || req.body?.fileName || '',
+            mimeType: req.file?.mimetype || req.body?.fileType || '',
+            parentCircularId: req.body?.parentCircularId,
+            parentVersionId: req.body?.parentVersionId,
+            isAmendment: req.body?.isAmendment === true || req.body?.isAmendment === 'true',
+          });
+          payloadToSend = { ...fullResult, persistence };
+        } catch (dbErr: any) {
+          console.warn('⚠️ [DB PERSISTENCE WARNING] Analyze succeeded but DB save failed:', sanitizeMongoMessage(dbErr?.message || String(dbErr)));
+        }
+      }
+
       // Return Final Result
       if (!checkAborted()) {
-        await sendEvent('result', fullResult);
+        await sendEvent('result', payloadToSend);
         if (!res.writableEnded) res.end();
       }
     } catch (err: any) {
@@ -349,6 +382,25 @@ app.post('/api/analyze', (req: Request, res: Response, next: any) => {
       }
     }
 
+    if (req.body?.sourceType !== 'sample' && result) {
+      try {
+        const sourceType = req.file ? 'upload' : req.body?.fileData ? 'camera' : 'paste';
+        const persistence = await saveOrReuseCircularAnalysis({
+          extractedText: documentText,
+          analysisResult: result,
+          sourceType,
+          sourceFilename: req.file?.originalname || req.body?.fileName || '',
+          mimeType: req.file?.mimetype || req.body?.fileType || '',
+          parentCircularId: req.body?.parentCircularId,
+          parentVersionId: req.body?.parentVersionId,
+          isAmendment: req.body?.isAmendment === true || req.body?.isAmendment === 'true',
+        });
+        result = { ...result, persistence };
+      } catch (dbErr: any) {
+        console.warn('⚠️ [DB PERSISTENCE WARNING] Non-stream analyze DB save failed:', sanitizeMongoMessage(dbErr?.message || String(dbErr)));
+      }
+    }
+
     res.json(result);
   } catch (err: any) {
     const errMsg = err.message || '';
@@ -362,19 +414,177 @@ app.post('/api/analyze', (req: Request, res: Response, next: any) => {
 // Document Comparison Endpoint
 app.post('/api/compare', async (req: Request, res: Response) => {
   try {
-    const { docA, docB } = req.body;
+    const { docA, docB, circularAId, circularBId, versionAId, versionBId } = req.body;
     if (!docA || !docB) {
       res.status(400).json({ error: 'Both docA and docB analysis objects are required.' });
       return;
     }
     const result = await compareTwoDocuments(docA, docB);
-    res.json(result);
+    let payloadToSend: any = result;
+    try {
+      const persistence = await saveOrReuseComparisonHistory({
+        docA,
+        docB,
+        comparisonResult: result,
+        circularAId,
+        circularBId,
+        versionAId,
+        versionBId,
+      });
+      payloadToSend = { ...result, persistence };
+    } catch (dbErr: any) {
+      console.warn('⚠️ [DB PERSISTENCE WARNING] Comparison succeeded but DB save failed:', sanitizeMongoMessage(dbErr?.message || String(dbErr)));
+    }
+    res.json(payloadToSend);
   } catch (err: any) {
     const errMsg = err.message || '';
     const isRateLimit = errMsg.includes('429') || errMsg.includes('Too many') || errMsg.includes('quota') || errMsg.includes('busy');
     res.status(isRateLimit ? 429 : 500).json({
       error: isRateLimit ? 'System is busy, please try again in a moment.' : errMsg || 'Failed to compare documents.',
     });
+  }
+});
+
+// Permanent Circular & Comparison History Endpoints
+app.get('/api/circulars', async (req: Request, res: Response) => {
+  try {
+    const limit = Number(req.query.limit) || 30;
+    const circulars = await listCircularsWithHistory(limit);
+    res.json({ circulars });
+  } catch (err: any) {
+    const msg = err?.message || '';
+    if (msg === 'DATABASE_DISCONNECTED') {
+      res.status(503).json({ error: 'MongoDB is not connected.' });
+      return;
+    }
+    res.status(500).json({ error: sanitizeMongoMessage(msg || 'Failed to load circulars.') });
+  }
+});
+
+app.post('/api/circulars', async (req: Request, res: Response) => {
+  try {
+    const { text, analysisResult, sourceType, sourceFilename, mimeType, parentCircularId, parentVersionId, isAmendment } = req.body || {};
+    let resolvedText = typeof text === 'string' ? text.trim() : '';
+    let resolvedAnalysis = analysisResult;
+
+    if (!resolvedAnalysis) {
+      if (!resolvedText || resolvedText.length < 10) {
+        res.status(400).json({ error: 'Either extracted circular text or analysisResult is required.' });
+        return;
+      }
+      resolvedAnalysis = await analyzeDocumentText(resolvedText, undefined, 'en');
+    } else if (!resolvedText) {
+      resolvedText = (resolvedAnalysis.clauses || []).map((c: any) => c.original_text || '').join('\n\n').trim();
+    }
+
+    const persistence = await saveOrReuseCircularAnalysis({
+      extractedText: resolvedText,
+      analysisResult: resolvedAnalysis,
+      sourceType: sourceType || 'api',
+      sourceFilename: sourceFilename || '',
+      mimeType: mimeType || '',
+      parentCircularId,
+      parentVersionId,
+      isAmendment: Boolean(isAmendment),
+    });
+
+    if (!persistence.saved) {
+      res.status(503).json({ error: persistence.reason || 'Database unavailable.' });
+      return;
+    }
+
+    res.status(persistence.deduplicated ? 200 : 201).json(persistence);
+  } catch (err: any) {
+    const msg = sanitizeMongoMessage(err?.message || 'Failed to save circular.');
+    const isBadInput = msg.includes('Invalid ') || msg.includes('not found') || msg.includes('rejected by Guard 1');
+    res.status(isBadInput ? 400 : 500).json({ error: msg });
+  }
+});
+
+app.get('/api/circulars/versions/:versionId', async (req: Request, res: Response) => {
+  try {
+    const version = await getCircularVersionById(String(req.params.versionId || ''));
+    if (!version) {
+      res.status(404).json({ error: 'Circular version not found.' });
+      return;
+    }
+    res.json({ version });
+  } catch (err: any) {
+    const msg = err?.message || '';
+    if (msg === 'DATABASE_DISCONNECTED') {
+      res.status(503).json({ error: 'MongoDB is not connected.' });
+      return;
+    }
+    res.status(500).json({ error: sanitizeMongoMessage(msg || 'Failed to retrieve circular version.') });
+  }
+});
+
+app.get('/api/circulars/:id/versions', async (req: Request, res: Response) => {
+  try {
+    const circular = await getCircularByIdWithVersions(String(req.params.id || ''));
+    if (!circular) {
+      res.status(404).json({ error: 'Circular not found.' });
+      return;
+    }
+    res.json({ circularId: circular.id, versions: circular.versions });
+  } catch (err: any) {
+    const msg = err?.message || '';
+    if (msg === 'DATABASE_DISCONNECTED') {
+      res.status(503).json({ error: 'MongoDB is not connected.' });
+      return;
+    }
+    res.status(500).json({ error: sanitizeMongoMessage(msg || 'Failed to retrieve version history.') });
+  }
+});
+
+app.get('/api/circulars/:id', async (req: Request, res: Response) => {
+  try {
+    const circular = await getCircularByIdWithVersions(String(req.params.id || ''));
+    if (!circular) {
+      res.status(404).json({ error: 'Circular not found.' });
+      return;
+    }
+    res.json({ circular });
+  } catch (err: any) {
+    const msg = err?.message || '';
+    if (msg === 'DATABASE_DISCONNECTED') {
+      res.status(503).json({ error: 'MongoDB is not connected.' });
+      return;
+    }
+    res.status(500).json({ error: sanitizeMongoMessage(msg || 'Failed to retrieve circular.') });
+  }
+});
+
+app.get('/api/comparisons', async (req: Request, res: Response) => {
+  try {
+    const limit = Number(req.query.limit) || 30;
+    const comparisons = await listComparisonHistory(limit);
+    res.json({ comparisons });
+  } catch (err: any) {
+    const msg = err?.message || '';
+    if (msg === 'DATABASE_DISCONNECTED') {
+      res.status(503).json({ error: 'MongoDB is not connected.' });
+      return;
+    }
+    res.status(500).json({ error: sanitizeMongoMessage(msg || 'Failed to load comparison history.') });
+  }
+});
+
+app.get('/api/comparisons/:id', async (req: Request, res: Response) => {
+  try {
+    const comparison = await getComparisonHistoryById(String(req.params.id || ''));
+    if (!comparison) {
+      res.status(404).json({ error: 'Comparison record not found.' });
+      return;
+    }
+    res.json({ comparison });
+  } catch (err: any) {
+    const msg = err?.message || '';
+    if (msg === 'DATABASE_DISCONNECTED') {
+      res.status(503).json({ error: 'MongoDB is not connected.' });
+      return;
+    }
+    res.status(500).json({ error: sanitizeMongoMessage(msg || 'Failed to retrieve comparison.') });
   }
 });
 
@@ -405,5 +615,6 @@ app.post('/api/chat', async (req: Request, res: Response) => {
 
 app.listen(PORT, () => {
   console.log(`⚡ GovScheme Diff Backend running on http://localhost:${PORT}`);
+  connectDatabase().catch((e) => console.warn('Startup database warning:', (e as any)?.message || e));
   verifyModelAvailabilityHealthCheck().catch((e) => console.warn('Startup health check warning:', e));
 });

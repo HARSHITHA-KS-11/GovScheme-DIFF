@@ -11,8 +11,18 @@ import {
   Loader2,
   FileCheck2,
   Trash2,
+  History,
+  RefreshCw,
+  FolderOpen,
 } from 'lucide-react';
-import { DocumentAnalysisResult, ComparisonResult, ActiveInputContext } from '../types/schemas';
+import {
+  DocumentAnalysisResult,
+  ComparisonResult,
+  ActiveInputContext,
+  SavedCircularSummary,
+  SavedCircularVersionDetail,
+  SavedComparisonSummary,
+} from '../types/schemas';
 import { ApiClient } from '../services/apiClient';
 import { AutoResizeTextarea } from './AutoResizeTextarea';
 import { RoboAiAssistant } from './RoboAiAssistant';
@@ -37,9 +47,19 @@ import {
   clearFeatureStorage,
 } from '../utils/persistence';
 
-interface ComparisonViewProps { }
+interface ComparisonViewProps {
+  initialPairRequest?: {
+    versionA: SavedCircularVersionDetail;
+    versionB: SavedCircularVersionDetail;
+    nonce: number;
+  } | null;
+  onComparisonSaved?: () => void;
+}
 
-export const ComparisonView: React.FC<ComparisonViewProps> = () => {
+export const ComparisonView: React.FC<ComparisonViewProps> = ({
+  initialPairRequest,
+  onComparisonSaved,
+}) => {
   const { language, t } = useLanguage();
   const compareLeftColumnRef = useRef<HTMLDivElement | null>(null);
   const [compareLeftColumnHeight, setCompareLeftColumnHeight] = useState<number | undefined>(undefined);
@@ -165,6 +185,130 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
   const setErrorMessage = (val: string | null) => {
     setErrorMessageState(val);
     saveErrorStorage('legallens_compare_error_message', val);
+  };
+
+  const [savedCirculars, setSavedCirculars] = useState<SavedCircularSummary[]>([]);
+  const [comparisonHistory, setComparisonHistory] = useState<SavedComparisonSummary[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState<boolean>(false);
+  const [openingComparisonId, setOpeningComparisonId] = useState<string | null>(null);
+  const lastHandledPairNonce = useRef<number | null>(null);
+
+  const loadSavedCompareData = async () => {
+    setIsHistoryLoading(true);
+    try {
+      const [circulars, comparisons] = await Promise.all([
+        ApiClient.listCirculars(25).catch(() => [] as SavedCircularSummary[]),
+        ApiClient.listComparisons(20).catch(() => [] as SavedComparisonSummary[]),
+      ]);
+      setSavedCirculars(circulars);
+      setComparisonHistory(comparisons);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSavedCompareData();
+  }, []);
+
+  useEffect(() => {
+    if (!initialPairRequest || initialPairRequest.nonce === lastHandledPairNonce.current) return;
+    lastHandledPairNonce.current = initialPairRequest.nonce;
+
+    const { versionA, versionB } = initialPairRequest;
+    setDocAMode('paste');
+    setDocAFile(null);
+    setDocAFileName(versionA.sourceFilename || versionA.title);
+    setDocAExtractedText('');
+    setDocAPastedText(versionA.extractedText);
+    setDocAError(null);
+
+    setDocBMode('paste');
+    setDocBFile(null);
+    setDocBFileName(versionB.sourceFilename || versionB.title);
+    setDocBExtractedText('');
+    setDocBPastedText(versionB.extractedText);
+    setDocBError(null);
+    setErrorMessage(null);
+
+    setIsLoading(true);
+    ApiClient.compareDocuments(
+      {
+        ...versionA.analysisResult,
+        persistence: {
+          saved: true,
+          deduplicated: false,
+          circularId: versionA.circularId,
+          versionId: versionA.id,
+        },
+      },
+      {
+        ...versionB.analysisResult,
+        persistence: {
+          saved: true,
+          deduplicated: false,
+          circularId: versionB.circularId,
+          versionId: versionB.id,
+        },
+      },
+      {
+        circularAId: versionA.circularId,
+        circularBId: versionB.circularId,
+        versionAId: versionA.id,
+        versionBId: versionB.id,
+      }
+    )
+      .then((res) => {
+        setComparisonResult(res);
+        loadSavedCompareData();
+        onComparisonSaved?.();
+      })
+      .catch((err: any) => {
+        setErrorMessage(err?.message || 'Could not compare saved versions.');
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
+  }, [initialPairRequest]);
+
+  const handleLoadVersionIntoSlot = async (slot: 'a' | 'b', versionId: string) => {
+    if (!versionId) return;
+    try {
+      const detail = await ApiClient.getCircularVersion(versionId);
+      if (slot === 'a') {
+        setDocAMode('paste');
+        setDocAFile(null);
+        setDocAFileName(detail.sourceFilename || detail.title);
+        setDocAExtractedText('');
+        setDocAPastedText(detail.extractedText);
+        setDocAError(null);
+      } else {
+        setDocBMode('paste');
+        setDocBFile(null);
+        setDocBFileName(detail.sourceFilename || detail.title);
+        setDocBExtractedText('');
+        setDocBPastedText(detail.extractedText);
+        setDocBError(null);
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to load selected circular version.');
+    }
+  };
+
+  const handleReopenSavedComparison = async (comparisonId: string) => {
+    setOpeningComparisonId(comparisonId);
+    setErrorMessage(null);
+    try {
+      const detail = await ApiClient.getComparisonById(comparisonId);
+      setComparisonResult(detail.comparisonResult);
+      setTimeout(() => {
+        document.getElementById('comparison-results-container')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 80);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Could not reopen this saved comparison.');
+    } finally {
+      setOpeningComparisonId(null);
+    }
   };
 
   const handleResetComparison = () => {
@@ -491,8 +635,15 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
       const docA = resA.value;
       const docB = resB.value;
 
-      const compRes = await ApiClient.compareDocuments(docA, docB);
+      const compRes = await ApiClient.compareDocuments(docA, docB, {
+        circularAId: docA.persistence?.circularId,
+        circularBId: docB.persistence?.circularId,
+        versionAId: docA.persistence?.versionId,
+        versionBId: docB.persistence?.versionId,
+      });
       setComparisonResult(compRes);
+      loadSavedCompareData();
+      onComparisonSaved?.();
     } catch (err: any) {
       setErrorMessage(err.message || 'Comparison failed. Please try again.');
     } finally {
@@ -639,6 +790,31 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                     </button>
                   </div>
                 </div>
+
+                {savedCirculars.length > 0 && (
+                  <div className="flex items-center space-x-2">
+                    <FolderOpen className="w-3.5 h-3.5 text-[#6E6659] shrink-0" />
+                    <select
+                      aria-label="Load saved version into Circular A"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          handleLoadVersionIntoSlot('a', e.target.value);
+                        }
+                      }}
+                      className="w-full bg-[#FBF8F1] border border-[#E7E1D3] rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-[#1E1B17] focus:outline-none focus:border-[#B85C38] cursor-pointer"
+                    >
+                      <option value="">Load saved circular for A...</option>
+                      {savedCirculars.map((circular) =>
+                        circular.versions.map((ver) => (
+                          <option key={ver.id} value={ver.id}>
+                            {circular.title} (v{ver.versionNumber} - {ver.isAmendment ? 'Amendment' : 'Original'})
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+                )}
 
                 {/* Source Indicator Badge */}
                 {activeTextA && (
@@ -804,6 +980,31 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
                     </button>
                   </div>
                 </div>
+
+                {savedCirculars.length > 0 && (
+                  <div className="flex items-center space-x-2">
+                    <FolderOpen className="w-3.5 h-3.5 text-[#6E6659] shrink-0" />
+                    <select
+                      aria-label="Load saved version into Circular B"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          handleLoadVersionIntoSlot('b', e.target.value);
+                        }
+                      }}
+                      className="w-full bg-[#FBF8F1] border border-[#E7E1D3] rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-[#1E1B17] focus:outline-none focus:border-[#B85C38] cursor-pointer"
+                    >
+                      <option value="">Load saved circular for B...</option>
+                      {savedCirculars.map((circular) =>
+                        circular.versions.map((ver) => (
+                          <option key={ver.id} value={ver.id}>
+                            {circular.title} (v{ver.versionNumber} - {ver.isAmendment ? 'Amendment' : 'Original'})
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+                )}
 
                 {/* Source Indicator Badge */}
                 {activeTextB && (
@@ -1124,6 +1325,93 @@ export const ComparisonView: React.FC<ComparisonViewProps> = () => {
               </div>
             </div>
           )}
+
+          {/* Saved Comparison History */}
+          <div className="bg-[#FBF8F1] border border-[#E7E1D3] rounded-2xl p-5 shadow-xs space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center space-x-2">
+                <History className="w-4 h-4 text-[#B85C38]" />
+                <div>
+                  <h3 className="text-sm font-bold text-[#1E1B17]">Saved Comparison History</h3>
+                  <p className="text-[11px] text-[#6E6659]">
+                    Reopen past circular comparisons without running them again.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={loadSavedCompareData}
+                disabled={isHistoryLoading}
+                className="inline-flex items-center space-x-1 text-xs font-semibold text-[#6E6659] hover:text-[#B85C38] px-2.5 py-1 rounded-lg border border-[#E7E1D3] bg-[#F6F1E7] cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isHistoryLoading ? 'animate-spin' : ''}`} />
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            {isHistoryLoading && comparisonHistory.length === 0 ? (
+              <div className="flex items-center space-x-2 text-xs text-[#6E6659] py-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#B85C38]" />
+                <span>Loading saved comparisons...</span>
+              </div>
+            ) : comparisonHistory.length === 0 ? (
+              <p className="text-xs text-[#6E6659] bg-[#F6F1E7] border border-[#E7E1D3] rounded-xl p-3">
+                No saved comparisons yet. Run a comparison above and it will be saved automatically.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {comparisonHistory.map((item) => (
+                  <div
+                    key={item.id}
+                    className="p-3 bg-[#F6F1E7] border border-[#E7E1D3] rounded-xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="text-xs font-bold text-[#1E1B17] truncate">
+                        {item.docATitle} vs {item.docBTitle}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-semibold">
+                        <span className="px-2 py-0.5 rounded bg-[#D1FAE5] text-[#065F46]">
+                          Added: {item.addedCount}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-[#FEF3C7] text-[#92400E]">
+                          Modified: {item.modifiedCount}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-[#FEE2E2] text-[#991B1B]">
+                          Removed: {item.removedCount}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-[#E5E7EB] text-[#374151]">
+                          Unchanged: {item.unchangedCount}
+                        </span>
+                        <span className="text-[#6E6659] font-normal">
+                          {new Date(item.updatedAt || item.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleReopenSavedComparison(item.id)}
+                      disabled={openingComparisonId === item.id}
+                      className="shrink-0 inline-flex items-center justify-center space-x-1.5 px-3 py-1.5 rounded-lg bg-[#1E1B17] hover:bg-[#332E27] text-[#F6F1E7] text-xs font-semibold cursor-pointer disabled:opacity-50"
+                    >
+                      {openingComparisonId === item.id ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Opening...</span>
+                        </>
+                      ) : (
+                        <>
+                          <FolderOpen className="w-3.5 h-3.5" />
+                          <span>Reopen</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Chat Assistant Screen Area (Takes equal 50% width alongside comparison panel when open) */}

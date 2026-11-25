@@ -4,6 +4,10 @@ import {
   ChatMessage,
   ServerConfigStatus,
   ActiveInputContext,
+  SavedCircularSummary,
+  SavedCircularVersionDetail,
+  SavedComparisonSummary,
+  SavedComparisonDetail,
 } from '../types/schemas.js';
 import type { SupportedLanguage } from '../types/language';
 
@@ -75,7 +79,13 @@ export class ApiClient {
     file?: File,
     language?: SupportedLanguage,
     onProgress?: (stageIndex: number, status: 'in_progress' | 'completed', elapsedMs?: number) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: {
+      sourceType?: 'user' | 'sample' | 'upload' | 'paste' | 'camera';
+      parentCircularId?: string;
+      parentVersionId?: string;
+      isAmendment?: boolean;
+    }
   ): Promise<DocumentAnalysisResult> {
     let reqBody: any;
     const reqHeaders: Record<string, string> = {
@@ -87,12 +97,20 @@ export class ApiClient {
       formData.append('file', file);
       if (text) formData.append('text', text);
       formData.append('language', language || this.getActiveLanguage());
+      if (options?.sourceType) formData.append('sourceType', options.sourceType);
+      if (options?.parentCircularId) formData.append('parentCircularId', options.parentCircularId);
+      if (options?.parentVersionId) formData.append('parentVersionId', options.parentVersionId);
+      if (options?.isAmendment) formData.append('isAmendment', 'true');
       reqBody = formData;
     } else {
       reqHeaders['Content-Type'] = 'application/json';
       reqBody = JSON.stringify({
         text: text || '',
         language: language || this.getActiveLanguage(),
+        sourceType: options?.sourceType,
+        parentCircularId: options?.parentCircularId,
+        parentVersionId: options?.parentVersionId,
+        isAmendment: options?.isAmendment,
       });
     }
 
@@ -190,12 +208,26 @@ export class ApiClient {
 
   public static async compareDocuments(
     docA: DocumentAnalysisResult,
-    docB: DocumentAnalysisResult
+    docB: DocumentAnalysisResult,
+    links?: {
+      circularAId?: string;
+      circularBId?: string;
+      versionAId?: string;
+      versionBId?: string;
+    }
   ): Promise<ComparisonResult> {
     const res = await fetch('/api/compare', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ docA, docB, language: this.getActiveLanguage() }),
+      body: JSON.stringify({
+        docA,
+        docB,
+        circularAId: links?.circularAId || docA.persistence?.circularId,
+        circularBId: links?.circularBId || docB.persistence?.circularId,
+        versionAId: links?.versionAId || docA.persistence?.versionId,
+        versionBId: links?.versionBId || docB.persistence?.versionId,
+        language: this.getActiveLanguage(),
+      }),
     });
 
     if (!res.ok) {
@@ -204,6 +236,46 @@ export class ApiClient {
     }
 
     return await res.json();
+  }
+
+  public static async listCirculars(limit: number = 30): Promise<SavedCircularSummary[]> {
+    const res = await fetch(`/api/circulars?limit=${encodeURIComponent(String(limit))}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to load saved circulars' }));
+      throw new Error(err.error || 'Failed to load saved circulars');
+    }
+    const data = await res.json();
+    return Array.isArray(data.circulars) ? data.circulars : [];
+  }
+
+  public static async getCircularVersion(versionId: string): Promise<SavedCircularVersionDetail> {
+    const res = await fetch(`/api/circulars/versions/${encodeURIComponent(versionId)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to open circular version' }));
+      throw new Error(err.error || 'Failed to open circular version');
+    }
+    const data = await res.json();
+    return data.version;
+  }
+
+  public static async listComparisons(limit: number = 25): Promise<SavedComparisonSummary[]> {
+    const res = await fetch(`/api/comparisons?limit=${encodeURIComponent(String(limit))}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to load comparison history' }));
+      throw new Error(err.error || 'Failed to load comparison history');
+    }
+    const data = await res.json();
+    return Array.isArray(data.comparisons) ? data.comparisons : [];
+  }
+
+  public static async getComparisonById(comparisonId: string): Promise<SavedComparisonDetail> {
+    const res = await fetch(`/api/comparisons/${encodeURIComponent(comparisonId)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to open comparison' }));
+      throw new Error(err.error || 'Failed to open comparison');
+    }
+    const data = await res.json();
+    return data.comparison;
   }
 
   public static async sendChatMessage(

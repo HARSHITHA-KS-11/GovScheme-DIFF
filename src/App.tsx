@@ -10,13 +10,20 @@ import { ComparisonView } from './components/ComparisonView';
 import { VoiceGroundedChat } from './components/VoiceGroundedChat';
 import { ActionableOutputs } from './components/ActionableOutputs';
 import { LegalAidLocator } from './components/LegalAidLocator';
+import { CircularHistoryPanel } from './components/CircularHistoryPanel';
 import { ExplainToFriendModal } from './components/ExplainToFriendModal';
 import { RoboAiAssistant } from './components/RoboAiAssistant';
 import { Footer } from './components/Footer';
 
 import { ApiClient } from './services/apiClient';
 import { SpeechEngine } from './utils/speech';
-import { DocumentAnalysisResult, SimplifiedClause, ServerConfigStatus, ActiveInputContext } from './types/schemas';
+import {
+  DocumentAnalysisResult,
+  SimplifiedClause,
+  ServerConfigStatus,
+  ActiveInputContext,
+  SavedCircularVersionDetail,
+} from './types/schemas';
 import { ShieldCheck, ShieldAlert, Layers, AlertOctagon, Zap, Sparkles, ChevronLeft, ChevronRight, Upload } from 'lucide-react';
 
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
@@ -220,6 +227,14 @@ function AppContent() {
     elapsedMs: {},
   });
 
+  const [historyRefreshToken, setHistoryRefreshToken] = useState<number>(0);
+  const [selectedParentCircular, setSelectedParentCircular] = useState<{ id: string; title: string } | null>(null);
+  const [pendingCompareVersions, setPendingCompareVersions] = useState<{
+    versionA: SavedCircularVersionDetail;
+    versionB: SavedCircularVersionDetail;
+    nonce: number;
+  } | null>(null);
+
   const handleToggleChatOpen = (open: boolean) => {
     setIsChatOpen(open);
     try {
@@ -421,7 +436,12 @@ function AppContent() {
             };
           });
         },
-        controller.signal
+        controller.signal,
+        {
+          sourceType: source,
+          parentCircularId: source !== 'sample' ? selectedParentCircular?.id : undefined,
+          isAmendment: source !== 'sample' && Boolean(selectedParentCircular),
+        }
       );
 
       if (currentReqId !== activeRequestIdRef.current) return;
@@ -430,6 +450,8 @@ function AppContent() {
         setSampleDocumentAnalysis(result);
       } else {
         setUserDocumentAnalysis(result);
+        setSelectedParentCircular(null);
+        setHistoryRefreshToken((n) => n + 1);
       }
       if (result.clauses && result.clauses.length > 0) {
         setActiveClauseId(result.clauses[0].id);
@@ -466,6 +488,51 @@ function AppContent() {
     setTimeout(() => {
       setHighlightedClauseId(null);
     }, 3500);
+  };
+
+  const handleOpenSavedVersion = (version: SavedCircularVersionDetail) => {
+    setErrorMessage(null);
+    setIsLoading(false);
+    setCaptureTab('upload');
+    const restoredAnalysis: DocumentAnalysisResult = {
+      ...version.analysisResult,
+      persistence: {
+        saved: true,
+        deduplicated: false,
+        circularId: version.circularId,
+        versionId: version.id,
+        versionNumber: version.versionNumber,
+        parentCircularId: version.parentCircularId,
+        parentVersionId: version.parentVersionId,
+        isAmendment: version.isAmendment,
+        pageCount: version.pageCount,
+        sectionCount: version.sections.length,
+        circularNumber: version.circularNumber,
+      },
+    };
+    setUserDocumentAnalysis(restoredAnalysis);
+    setActiveInputContext({
+      uploadedFileName: version.sourceFilename || version.title,
+      uploadedFileType: version.mimeType || 'Saved Circular',
+      extractedInputText: version.extractedText,
+      hasInput: true,
+    });
+    if (restoredAnalysis.clauses && restoredAnalysis.clauses.length > 0) {
+      setActiveClauseId(restoredAnalysis.clauses[0].id);
+    } else {
+      setActiveClauseId(null);
+    }
+    setTimeout(() => {
+      window.scrollTo({ top: 380, behavior: 'smooth' });
+    }, 80);
+  };
+
+  const handleCompareSavedVersions = (
+    versionA: SavedCircularVersionDetail,
+    versionB: SavedCircularVersionDetail
+  ) => {
+    setPendingCompareVersions({ versionA, versionB, nonce: Date.now() });
+    handleSelectTab('compare');
   };
 
   return (
@@ -538,6 +605,30 @@ function AppContent() {
                   title="Dismiss message"
                 >
                   ✕
+                </button>
+              </div>
+            )}
+
+            {/* Amendment Upload Target Banner */}
+            {selectedParentCircular && (
+              <div
+                id="amendment-target-banner"
+                className="bg-[#FFFBEB] border-2 border-[#FDE68A] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs text-[#92400E] shadow-xs animate-fade-in-up"
+              >
+                <div className="space-y-0.5">
+                  <div className="font-bold text-[11px] uppercase tracking-wider text-[#92400E]">
+                    Adding Amendment Version
+                  </div>
+                  <div className="font-semibold text-[#1E1B17]">
+                    Your next uploaded or pasted circular will be linked as an amendment to &ldquo;{selectedParentCircular.title}&rdquo;.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedParentCircular(null)}
+                  className="px-3 py-1 rounded-lg bg-[#FBF8F1] hover:bg-[#E7E1D3] text-[#1E1B17] font-semibold border border-[#E7E1D3] cursor-pointer"
+                >
+                  Cancel Amendment
                 </button>
               </div>
             )}
@@ -886,6 +977,22 @@ function AppContent() {
               </div>
             )}
 
+            {/* Saved Circulars & Amendment History */}
+            <CircularHistoryPanel
+              refreshToken={historyRefreshToken}
+              activeVersionId={documentAnalysis?.persistence?.versionId || null}
+              selectedParentCircularId={selectedParentCircular?.id || null}
+              onSelectParentCircular={(parent) => {
+                setSelectedParentCircular(parent);
+                if (parent && typeof window !== 'undefined') {
+                  setCaptureTab('upload');
+                  window.scrollTo({ top: 300, behavior: 'smooth' });
+                }
+              }}
+              onOpenVersion={handleOpenSavedVersion}
+              onCompareVersions={handleCompareSavedVersions}
+            />
+
             {/* Mission Section: Family Editorial Illustration */}
             <div className="mt-16 md:mt-24 pt-8 pb-6 text-center space-y-5 hidden min-[360px]:block animate-fade-in-up">
               <div className="max-w-2xl mx-auto space-y-2.5 px-4">
@@ -921,7 +1028,12 @@ function AppContent() {
         )}
 
         {/* Tab 2: Compare Circulars Workflow */}
-        {activeTab === 'compare' && <ComparisonView />}
+        {activeTab === 'compare' && (
+          <ComparisonView
+            initialPairRequest={pendingCompareVersions}
+            onComparisonSaved={() => setHistoryRefreshToken((n) => n + 1)}
+          />
+        )}
 
         {/* Tab 3: Free Legal Aid Locator Workflow */}
         {activeTab === 'legal_aid' && <LegalAidLocator />}

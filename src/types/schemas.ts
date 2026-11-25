@@ -164,6 +164,28 @@ export interface ExecutionBlockAnalysis {
   defect_description?: string;
 }
 
+export interface CircularPersistenceMeta {
+  saved: boolean;
+  deduplicated: boolean;
+  circularId?: string;
+  versionId?: string;
+  versionNumber?: number;
+  parentCircularId?: string | null;
+  parentVersionId?: string | null;
+  isAmendment?: boolean;
+  pageCount?: number;
+  sectionCount?: number;
+  circularNumber?: string;
+  reason?: string;
+}
+
+export interface ComparisonPersistenceMeta {
+  saved: boolean;
+  deduplicated: boolean;
+  comparisonId?: string;
+  reason?: string;
+}
+
 export interface DocumentAnalysisResult {
   guard1: Guard1InputGate;
   document_title: string;
@@ -179,6 +201,7 @@ export interface DocumentAnalysisResult {
   options_next_steps: NextStepsOption[];
   lawyer_briefing: LawyerBriefingArtifact;
   disclaimer: string;
+  persistence?: CircularPersistenceMeta;
 }
 
 export interface ChecklistItem {
@@ -267,6 +290,76 @@ export interface ComparisonResult {
   key_differences_summary: string;
   winner_recommendation?: string;
   disclaimer: string;
+  persistence?: ComparisonPersistenceMeta;
+}
+
+export interface SavedCircularVersionSummary {
+  id: string;
+  circularId: string;
+  parentCircularId: string | null;
+  parentVersionId: string | null;
+  isAmendment: boolean;
+  versionNumber: number;
+  contentHash: string;
+  title: string;
+  circularNumber: string;
+  issuingAuthority: string;
+  category: string;
+  documentKind: string;
+  sourceType: 'upload' | 'paste' | 'camera' | 'api';
+  sourceFilename: string;
+  mimeType: string;
+  pageCount: number;
+  sectionCount: number;
+  createdAt: string;
+}
+
+export interface SavedCircularSummary {
+  id: string;
+  circularKey: string;
+  title: string;
+  circularNumber: string;
+  issuingAuthority: string;
+  category: string;
+  documentKind: string;
+  sourceType: 'upload' | 'paste' | 'camera' | 'api';
+  sourceFilename: string;
+  mimeType: string;
+  latestVersionNumber: number;
+  latestVersionId: string | null;
+  totalVersions: number;
+  createdAt: string;
+  updatedAt: string;
+  versions: SavedCircularVersionSummary[];
+}
+
+export interface SavedCircularVersionDetail extends SavedCircularVersionSummary {
+  extractedText: string;
+  sections: SimplifiedClause[];
+  analysisResult: DocumentAnalysisResult;
+}
+
+export interface SavedComparisonSummary {
+  id: string;
+  pairHash: string;
+  docATitle: string;
+  docBTitle: string;
+  circularAId: string | null;
+  circularBId: string | null;
+  versionAId: string | null;
+  versionBId: string | null;
+  addedCount: number;
+  removedCount: number;
+  modifiedCount: number;
+  unchangedCount: number;
+  keyDifferencesSummary: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SavedComparisonDetail extends SavedComparisonSummary {
+  alignedPairs: AlignedClausePair[];
+  comparisonResult: ComparisonResult;
 }
 
 export interface QuotaTelemetry {
